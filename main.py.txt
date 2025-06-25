@@ -1,3 +1,4 @@
+import os
 import discord
 import requests
 import csv
@@ -7,13 +8,19 @@ from discord.ext import tasks
 from keep_alive import keep_alive
 import logging
 from datetime import time
-import os
+
+# Debug info to check deployment environment
+print("Current working directory:", os.getcwd())
+print("Files here:", os.listdir())
 
 logging.basicConfig(level=logging.INFO)
 
-print("💡 Bot restarted successfully! 🚀")  # New startup confirmation
+print("💡 main.py is running")  # Startup log
 
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+if not TOKEN:
+    print("❌ ERROR: DISCORD_BOT_TOKEN environment variable not set!")
+    exit(1)
 
 CHANNEL_ID = 1387520693859782867
 
@@ -28,10 +35,9 @@ client = discord.Client(intents=intents)
 async def on_ready():
     print("✅ Discord bot connected")
     print(f'Logged in as {client.user}')
-    print("💡 Bot restarted successfully! 🚀")  # Confirm on_ready called
     post_daily_message.start()
 
-@tasks.loop(time=time(hour=12, minute=0))  # Sends message daily at 12:00 UTC
+@tasks.loop(time=time(hour=12, minute=0))
 async def post_daily_message():
     logging.info("Attempting to send daily message")
     try:
@@ -58,6 +64,6 @@ async def post_daily_message():
     except Exception as e:
         logging.error(f"Error sending daily message: {e}")
 
-# Start keep_alive web server and run bot
+# Start the keep_alive server and run bot
 keep_alive()
 client.run(TOKEN)
