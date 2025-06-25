@@ -7,15 +7,15 @@ from discord.ext import tasks
 from keep_alive import keep_alive
 import logging
 from datetime import time
+import os
 
 logging.basicConfig(level=logging.INFO)
 
-print("💡 main.py is running")  # Startup log
+print("💡 Bot restarted successfully! 🚀")  # New startup confirmation
 
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
-CHANNEL_ID = 1387520693859782867  # Channel to post questions and purge messages
-ADMIN_CHANNEL_ID = 1387520693859782867  # Admin channel to collect anonymous answers
+CHANNEL_ID = 1387520693859782867
 
 CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTzKsZYB9345dqSaz-y0r2P3ui0SqmibWLMPQgE5l5AV3fK0m0XconU5JBCEjtSEYa-hP7hrHikaZBC/pub?output=csv'
 
@@ -28,22 +28,10 @@ client = discord.Client(intents=intents)
 async def on_ready():
     print("✅ Discord bot connected")
     print(f'Logged in as {client.user}')
+    print("💡 Bot restarted successfully! 🚀")  # Confirm on_ready called
     post_daily_message.start()
-    purge_channel_before_post.start()
 
-@tasks.loop(time=time(hour=11, minute=59))
-async def purge_channel_before_post():
-    channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        try:
-            deleted = await channel.purge(limit=1000)
-            logging.info(f"Purged {len(deleted)} messages from channel {channel.name}")
-        except Exception as e:
-            logging.error(f"Failed to purge messages: {e}")
-    else:
-        logging.error("Channel not found. Check CHANNEL_ID.")
-
-@tasks.loop(time=time(hour=12, minute=0))
+@tasks.loop(time=time(hour=12, minute=0))  # Sends message daily at 12:00 UTC
 async def post_daily_message():
     logging.info("Attempting to send daily message")
     try:
@@ -70,18 +58,6 @@ async def post_daily_message():
     except Exception as e:
         logging.error(f"Error sending daily message: {e}")
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
-
-    if message.guild is None:  # DM to bot
-        admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
-        if admin_channel:
-            await admin_channel.send(f"📩 Anonymous answer received:\n{message.content}")
-            await message.channel.send("Thanks! Your answer was received anonymously.")
-        else:
-            await message.channel.send("Sorry, couldn't deliver your answer right now.")
-
+# Start keep_alive web server and run bot
 keep_alive()
 client.run(TOKEN)
