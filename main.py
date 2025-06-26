@@ -29,7 +29,6 @@ async def on_ready():
     print("✅ Discord bot connected")
     print(f'Logged in as {client.user}')
     post_daily_message.start()
-    await post_daily_message()  # Send the daily message immediately for testing
 
 @tasks.loop(time=time(hour=12, minute=0))
 async def post_daily_message():
