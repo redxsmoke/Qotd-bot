@@ -4,7 +4,7 @@ import csv
 import io
 import datetime
 from discord.ext import tasks
-from keep_alive import keep_alive  # Remove/comment if unused
+from keep_alive import keep_alive  # Comment out if unused
 import logging
 from datetime import time
 import os
@@ -38,9 +38,9 @@ async def on_ready():
     post_daily_message.start()
     purge_channel_before_post.start()
 
-@tasks.loop(seconds=30)  # Send message every 30 seconds
+@tasks.loop(time=time(hour=12, minute=0))  # Post once daily at 12:00 PM
 async def post_daily_message():
-    logging.info("⏰ Attempting to send scheduled message")
+    logging.info("⏰ Attempting to send scheduled daily message")
     try:
         response = requests.get(CSV_URL)
         if response.status_code == 200:
@@ -55,7 +55,7 @@ async def post_daily_message():
                 channel = client.get_channel(CHANNEL_ID)
                 if channel:
                     await channel.send(message)
-                    logging.info(f"✅ Sent message: {message}")
+                    logging.info(f"✅ Sent daily message: {message}")
                 else:
                     logging.error("❌ Channel not found. Check CHANNEL_ID.")
             else:
@@ -63,9 +63,9 @@ async def post_daily_message():
         else:
             logging.error(f"❌ Failed to fetch Google Sheet: {response.status_code}")
     except Exception as e:
-        logging.error(f"❌ Error sending scheduled message: {e}")
+        logging.error(f"❌ Error sending daily message: {e}")
 
-@tasks.loop(time=time(hour=11, minute=59))  # Purge channel daily at 11:59
+@tasks.loop(time=time(hour=11, minute=59))  # Purge channel daily at 11:59 AM
 async def purge_channel_before_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel:
