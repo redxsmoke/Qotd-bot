@@ -65,7 +65,7 @@ async def post_daily_message():
     except Exception as e:
         logging.error(f"❌ Error sending daily message: {e}")
 
-@tasks.loop(time=time(hour=11, minute=59))  # Purge channel daily at 11:59 AM
+@tasks.loop(seconds=30)  # Purge channel every 30 seconds (testing)
 async def purge_channel_before_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel:
