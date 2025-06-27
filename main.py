@@ -3,6 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
+from discord.ui import View, Button
 from keep_alive import keep_alive  # Comment out if unused
 import logging
 from datetime import time
@@ -207,6 +208,67 @@ async def remove_question(interaction: discord.Interaction, id: int):
     await interaction.response.send_message(f"✅ Question with ID {id} has been removed.", ephemeral=True)
 
 
+class QuestionQueueView(View):
+    def __init__(self, questions, user, per_page=20):
+        super().__init__(timeout=180)
+        self.questions = questions
+        self.user = user
+        self.per_page = per_page
+        self.current_page = 0
+        self.max_page = (len(questions) - 1) // per_page
+
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+        if self.current_page > 0:
+            self.add_item(Button(label="Previous", style=discord.ButtonStyle.primary, custom_id="prev_page"))
+        if self.current_page < self.max_page:
+            self.add_item(Button(label="Next", style=discord.ButtonStyle.primary, custom_id="next_page"))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("These buttons aren't for you!", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        # edit the message to disable buttons after timeout
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.primary, custom_id="prev_page")
+    async def previous_page(self, interaction: discord.Interaction, button: Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await self.update_message(interaction)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary, custom_id="next_page")
+    async def next_page(self, interaction: discord.Interaction, button: Button):
+        if self.current_page < self.max_page:
+            self.current_page += 1
+            await self.update_message(interaction)
+
+    async def update_message(self, interaction: discord.Interaction):
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        page_questions = self.questions[start:end]
+
+        lines = [
+            f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}"
+            for q in page_questions
+        ]
+        content = f"📋 Question Queue (Page {self.current_page + 1}/{self.max_page + 1}):\n" + "\n".join(lines)
+
+        self.update_buttons()
+        await interaction.response.edit_message(content=content, view=self)
+
+
 @tree.command(name="questionqueue", description="Admin-only view of question queue with IDs")
 async def question_queue(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
@@ -221,12 +283,20 @@ async def question_queue(interaction: discord.Interaction):
         await interaction.response.send_message("No questions in queue.", ephemeral=True)
         return
 
+    view = QuestionQueueView(questions, interaction.user)
+    start = 0
+    end = view.per_page
+    page_questions = questions[start:end]
+
     lines = [
         f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}"
-        for q in questions
+        for q in page_questions
     ]
-    message = "📋 Question Queue:\n" + "\n".join(lines)
-    await interaction.response.send_message(message, ephemeral=True)
+    content = f"📋 Question Queue (Page 1/{view.max_page + 1}):\n" + "\n".join(lines)
+
+    msg = await interaction.response.send_message(content=content, view=view, ephemeral=True)
+    # Store message to the view so it can edit itself on button clicks
+    view.message = await interaction.original_response()
 
 
 # Keep the bot alive on hosting platforms that require it
