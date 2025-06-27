@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button
+from discord.ui import View, Button, Modal, TextInput
 from keep_alive import keep_alive
 import logging
 from datetime import time
@@ -72,16 +72,16 @@ async def post_question():
             super().__init__(timeout=None)
             self.qid = qid
 
-        @discord.ui.button(label="Answer Anonymously", style=discord.ButtonStyle.secondary, custom_id="anon")
-        async def anon_button(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_message("Please DM me your anonymous response!", ephemeral=True)
-
-        @discord.ui.button(label="Answer Freely", style=discord.ButtonStyle.primary, custom_id="freely")
+        @discord.ui.button(label="Answer Freely 🧠 (+1 Insight)", style=discord.ButtonStyle.success, custom_id="freely")
         async def free_button(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_modal(AnswerModal(qid=self.qid, user=interaction.user))
+            await interaction.response.send_modal(AnswerFreelyModal(qid=self.qid, user=interaction.user))
 
-    class AnswerModal(discord.ui.Modal, title="Answer the Question"):
-        answer = discord.ui.TextInput(label="Your answer", style=discord.TextStyle.paragraph)
+        @discord.ui.button(label="Answer Anonymously (0 Insight)", style=discord.ButtonStyle.secondary, custom_id="anon")
+        async def anon_button(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_modal(AnswerAnonymouslyModal(qid=self.qid, user=interaction.user))
+
+    class AnswerFreelyModal(Modal, title="Answer Freely"):
+        answer = TextInput(label="Your answer", style=discord.TextStyle.paragraph)
 
         def __init__(self, qid, user):
             super().__init__()
@@ -96,11 +96,25 @@ async def post_question():
                 scores[uid]["insight_points"] += 1
                 scores[uid]["answered_questions"].append(self.qid)
                 save_scores(scores)
-                msg = f"🗣️ Answer from <@{uid}>:\n{self.answer}\n\n✨ +1 Insight Point!"
+                msg = f"🔣 Answer from <@{uid}>:\n{self.answer}\n\n🌟 +1 Insight Point!"
             else:
-                msg = f"🗣️ Answer from <@{uid}>:\n{self.answer}\n\n(You've already earned a point for this one!)"
+                msg = f"🔣 Answer from <@{uid}>:\n{self.answer}\n\n(You've already earned a point for this one!)"
 
             await interaction.response.send_message(msg)
+
+    class AnswerAnonymouslyModal(Modal, title="Answer Anonymously"):
+        answer = TextInput(label="Your anonymous answer", style=discord.TextStyle.paragraph)
+
+        def __init__(self, qid, user):
+            super().__init__()
+            self.qid = qid
+            self.user = user
+
+        async def on_submit(self, interaction: discord.Interaction):
+            admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
+            if admin_channel:
+                await admin_channel.send(f"📬 Anonymous answer:\n{self.answer}")
+                await interaction.response.send_message("✅ Received anonymously.", ephemeral=True)
 
     channel = client.get_channel(CHANNEL_ID)
     await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
@@ -112,7 +126,7 @@ async def on_ready():
     await tree.sync()
     purge_channel_before_post.start()
     post_daily_message.start()
-    await post_question()  # Post immediately for testing
+    await post_question()
 
 @tasks.loop(time=time(hour=11, minute=59))
 async def purge_channel_before_post():
@@ -130,10 +144,14 @@ async def on_message(message):
         return
     if message.guild is None:
         admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
-        await admin_channel.send(f"📩 Anonymous answer:\n{message.content}")
+        await admin_channel.send(f"📬 Anonymous answer:\n{message.content}")
         await message.channel.send("✅ Received anonymously.")
 
 # --- Slash Commands ---
+@tree.command(name="questionofthedaycommands", description="List available question commands")
+async def question_commands(interaction: discord.Interaction):
+    await interaction.response.send_message("Available commands:\n/submitquestion\n/score\n/leaderboard", ephemeral=True)
+
 @tree.command(name="submitquestion", description="Submit a new question")
 @app_commands.describe(question="Your question", type="plain or multiple choice", choice1="Option 1", choice2="Option 2", choice3="Optional", choice4="Optional")
 @app_commands.choices(type=[
@@ -189,7 +207,6 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
 
     key = "total" if category.value == "all" else ("insight" if category.value == "insight" else "fuel")
     sorted_users = sorted(users, key=itemgetter(key), reverse=True)
-
     pages = [sorted_users[i:i+10] for i in range(0, len(sorted_users), 10)]
 
     class LeaderboardView(View):
