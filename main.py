@@ -190,7 +190,7 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
     async def on_submit(self, interaction: discord.Interaction):
         question_text = self.question_input.value.strip()
         questions = load_questions()
-        
+
         # Assign next numeric ID based on existing max id in questions.json
         max_id = 0
         for q in questions:
@@ -204,6 +204,23 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
 
         questions.append({"id": new_id, "question": question_text, "submitter": str(self.user.id)})
         save_questions(questions)
+
+        # Add contributor point (max 1 per day)
+        scores = load_scores()
+        uid = str(self.user.id)
+        today_str = datetime.date.today().isoformat()
+
+        if uid not in scores:
+            scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": [], "last_contrib_date": ""}
+
+        last_date = scores[uid].get("last_contrib_date", "")
+        if last_date != today_str:
+            scores[uid]["contribution_points"] = scores[uid].get("contribution_points", 0) + 1
+            scores[uid]["last_contrib_date"] = today_str
+            save_scores(scores)
+            contributor_msg = "\n\n💡 You have been awarded 1 contributor point for submitting a question today!"
+        else:
+            contributor_msg = ""
 
         guild = interaction.guild
         if guild is None:
@@ -219,7 +236,7 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
             except Exception:
                 pass
 
-        await interaction.response.send_message(f"\u2705 Question submitted successfully! ID: `{new_id}`", ephemeral=True)
+        await interaction.response.send_message(f"\u2705 Question submitted successfully! ID: `{new_id}`{contributor_msg}", ephemeral=True)
 
 @tree.command(name="submitquestion", description="Submit a new question")
 async def submit_question(interaction: discord.Interaction):
