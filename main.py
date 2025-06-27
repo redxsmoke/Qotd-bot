@@ -78,7 +78,7 @@ async def post_question():
 
         @discord.ui.button(label="Answer Anonymously (0 Insight)", style=discord.ButtonStyle.secondary, custom_id="anon")
         async def anon_button(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_message("Please reply here with your anonymous answer (this will be relayed anonymously).", ephemeral=True)
+            await interaction.response.send_modal(AnonAnswerModal(qid=self.qid))
 
     class AnswerModal(discord.ui.Modal, title="Answer the Question"):
         answer = discord.ui.TextInput(label="Your answer", style=discord.TextStyle.paragraph)
@@ -101,6 +101,21 @@ async def post_question():
                 msg = f"🗣️ Answer from <@{uid}>:\n{self.answer}\n\n(You've already earned a point for this question!)"
 
             await interaction.response.send_message(msg)
+
+    class AnonAnswerModal(discord.ui.Modal, title="Answer Anonymously"):
+        answer = discord.ui.TextInput(label="Your anonymous answer", style=discord.TextStyle.paragraph)
+
+        def __init__(self, qid):
+            super().__init__()
+            self.qid = qid
+
+        async def on_submit(self, interaction: discord.Interaction):
+            admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
+            if admin_channel:
+                await admin_channel.send(f"📩 Anonymous answer received:\n{self.answer}")
+                await interaction.response.send_message("✅ Your anonymous answer has been sent.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Admin channel not found, could not send answer.", ephemeral=True)
 
     channel = client.get_channel(CHANNEL_ID)
     await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
@@ -129,22 +144,27 @@ async def on_message(message):
     if message.author == client.user:
         return
     if message.guild is None:
-        admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
-        await admin_channel.send(f"📩 Anonymous answer:\n{message.content}")
-        await message.channel.send("✅ Received anonymously.")
+        # Do not relay anonymous answers here anymore, modal handles it now.
+        return
 
 # --- Slash Commands ---
-@tree.command(name="questionofthedaycommands", description="List available question commands")
-async def questionofthedaycommands(interaction: discord.Interaction):
-    cmds = "/submitquestion\n/removequestion\n/questionqueue\n/score\n/leaderboard\n/addpoints\n/removepoints"
-    await interaction.response.send_message(f"Available commands:\n{cmds}", ephemeral=True)
-
 @tree.command(name="submitquestion", description="Submit a new question")
-@app_commands.describe(question="Your question")
-async def submit_question(interaction: discord.Interaction, question: str):
+@app_commands.describe(question="Your question", type="plain or multiple choice", choice1="Option 1", choice2="Option 2", choice3="Optional", choice4="Optional")
+@app_commands.choices(type=[
+    app_commands.Choice(name="question", value="plain"),
+    app_commands.Choice(name="question with answer (mult-choice)", value="multiple_choice")
+])
+async def submit_question(interaction: discord.Interaction, question: str, type: app_commands.Choice[str], choice1: str = None, choice2: str = None, choice3: str = None, choice4: str = None):
     questions = load_questions()
     new_id = max([q["id"] for q in questions], default=0) + 1
     q_obj = {"id": new_id, "question": question, "submitter": interaction.user.id}
+
+    if type.value == "multiple_choice":
+        if not choice1 or not choice2:
+            await interaction.response.send_message("❌ You must provide at least 2 choices.", ephemeral=True)
+            return
+        q_obj["answers"] = [c for c in [choice1, choice2, choice3, choice4] if c]
+
     questions.append(q_obj)
     save_questions(questions)
 
@@ -156,48 +176,11 @@ async def submit_question(interaction: discord.Interaction, question: str):
 
     await interaction.response.send_message(f"✅ Question submitted (ID: {new_id}) — +1 Contributor Point!", ephemeral=True)
 
-@tree.command(name="removequestion", description="Remove a question by ID (admin/mod only)")
-@app_commands.describe(id="ID of the question to remove")
-async def remove_question(interaction: discord.Interaction, id: int):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-
-    questions = load_questions()
-    original_len = len(questions)
-    questions = [q for q in questions if q["id"] != id]
-
-    if len(questions) == original_len:
-        await interaction.response.send_message(f"❌ No question found with ID {id}.", ephemeral=True)
-        return
-
-    save_questions(questions)
-    await interaction.response.send_message(f"✅ Question with ID {id} has been removed.", ephemeral=True)
-
-@tree.command(name="questionqueue", description="Admin-only view of question queue with IDs")
-async def question_queue(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-
-    questions = load_questions()
-    if not questions:
-        await interaction.response.send_message("No questions in queue.", ephemeral=True)
-        return
-
-    lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
-    message = "📋 Question Queue:\n" + "\n".join(lines)
-    await interaction.response.send_message(message, ephemeral=True)
-
 @tree.command(name="score", description="View your points")
 async def score(interaction: discord.Interaction):
     uid = str(interaction.user.id)
     scores = load_scores().get(uid, {"insight_points": 0, "contribution_points": 0})
-    await interaction.response.send_message(
-        f"🧠 Insight Points: {scores['insight_points']}\n"
-        f"🔥 Contributor Points: {scores['contribution_points']}",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"🧠 Insight Points: {scores['insight_points']}\n✨ Contributor Points: {scores['contribution_points']}", ephemeral=True)
 
 @tree.command(name="leaderboard", description="See the leaderboard")
 @app_commands.describe(category="Sort by: all, insight, contributor")
@@ -231,7 +214,7 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
         async def update(self, interaction):
             lines = []
             for u in pages[self.page]:
-                lines.append(f"<@{u['id']}> — 🧠 {u['insight']} | 🔥 {u['contributor']}")
+                lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight | ✨ {u['contributor']} Contributor")
             await interaction.response.edit_message(content=f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=self)
 
         @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
@@ -251,53 +234,23 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
     else:
         lines = []
         for u in pages[0]:
-            lines.append(f"<@{u['id']}> — 🧠 {u['insight']} | 🔥 {u['contributor']}")
+            lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight | ✨ {u['contributor']} Contributor")
         await interaction.response.send_message(f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=LeaderboardView(), ephemeral=False)
 
-# Admin-only addpoints command
-@tree.command(name="addpoints", description="Add points to a user (admin only)")
-@app_commands.describe(user="User to add points to", point_type="Type of points", quantity="Quantity of points to add")
-@app_commands.choices(point_type=[
-    app_commands.Choice(name="Insight", value="insight_points"),
-    app_commands.Choice(name="Contributor", value="contribution_points")
-])
-async def addpoints(interaction: discord.Interaction, user: discord.Member, point_type: app_commands.Choice[str], quantity: int):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-    if quantity <= 0:
-        await interaction.response.send_message("❌ Quantity must be positive.", ephemeral=True)
-        return
+@tree.command(name="questionofthedaycommands", description="List available question commands")
+async def question_commands(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Available commands:\n"
+        "/submitquestion\n"
+        "/removequestion\n"
+        "/questionqueue\n"
+        "/score\n"
+        "/leaderboard\n"
+        "/addpoints\n"
+        "/removepoints",
+        ephemeral=True
+    )
 
-    scores = load_scores()
-    uid = str(user.id)
-    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
-    scores[uid][point_type.value] += quantity
-    save_scores(scores)
-    await interaction.response.send_message(f"✅ Added {quantity} {point_type.name} point(s) to {user.mention}.", ephemeral=True)
-
-# Admin-only removepoints command
-@tree.command(name="removepoints", description="Remove points from a user (admin only)")
-@app_commands.describe(user="User to remove points from", point_type="Type of points", quantity="Quantity of points to remove")
-@app_commands.choices(point_type=[
-    app_commands.Choice(name="Insight", value="insight_points"),
-    app_commands.Choice(name="Contributor", value="contribution_points")
-])
-async def removepoints(interaction: discord.Interaction, user: discord.Member, point_type: app_commands.Choice[str], quantity: int):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-        return
-    if quantity <= 0:
-        await interaction.response.send_message("❌ Quantity must be positive.", ephemeral=True)
-        return
-
-    scores = load_scores()
-    uid = str(user.id)
-    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
-    scores[uid][point_type.value] = max(0, scores[uid][point_type.value] - quantity)
-    save_scores(scores)
-    await interaction.response.send_message(f"✅ Removed {quantity} {point_type.name} point(s) from {user.mention}.", ephemeral=True)
-
-# --- Keep alive & run ---
+# Keep alive & run
 keep_alive()
 client.run(TOKEN)
