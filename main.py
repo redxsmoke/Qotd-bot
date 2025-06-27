@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import View, Button, Modal, TextInput, Select
 from keep_alive import keep_alive
 import logging
 from datetime import time
@@ -70,10 +70,6 @@ def get_rank(total):
         return "\U0001F95A Wasabi Wizard"
     else:
         return "\U0001F371 Sushi Sensei"
-
-def generate_unique_id():
-    import uuid
-    return str(uuid.uuid4())[:8]
 
 async def post_question():
     q = get_today_question()
@@ -190,7 +186,16 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
     async def on_submit(self, interaction: discord.Interaction):
         question_text = self.question_input.value.strip()
         questions = load_questions()
-        new_id = generate_unique_id()
+        # Assign incremental ID based on max existing ID
+        max_id = 0
+        for q in questions:
+            try:
+                q_id_int = int(q.get("id"))
+                if q_id_int > max_id:
+                    max_id = q_id_int
+            except:
+                pass
+        new_id = str(max_id + 1)
         questions.append({"id": new_id, "question": question_text, "submitter": str(self.user.id)})
         save_questions(questions)
 
@@ -250,31 +255,36 @@ async def score(interaction: discord.Interaction):
     total = insight + contrib
     await interaction.response.send_message(f"⭐ Insight: {insight}\n💡 Contribution: {contrib}\n🏆 Rank: {get_rank(total)}", ephemeral=True)
 
-# --- Updated Add/Remove Points Modal ---
+# --- Updated Add/Remove Points Modal with Point Type Select ---
 
 class PointsModal(Modal):
-    point_type_input = TextInput(label="Point Type (insight or contribution)", style=discord.TextStyle.short, required=True)
+    point_type_select = Select(
+        placeholder="Select point type...",
+        options=[
+            discord.SelectOption(label="Insight", value="insight"),
+            discord.SelectOption(label="Contribution", value="contribution")
+        ],
+        min_values=1,
+        max_values=1,
+        custom_id="point_type_select"
+    )
     quantity_input = TextInput(label="Quantity (positive integer)", style=discord.TextStyle.short, required=True)
 
     def __init__(self, action: str, user: discord.User):
         super().__init__(title=f"{action} Points for {user.display_name}")
         self.action = action
         self.target_user = user
-        self.add_item(self.point_type_input)
+        self.add_item(self.point_type_select)
         self.add_item(self.quantity_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        point_type = self.point_type_input.value.strip().lower()
+        point_type = self.point_type_select.values[0]
         try:
             qty = int(self.quantity_input.value.strip())
             if qty <= 0:
                 raise ValueError()
         except ValueError:
             await interaction.response.send_message("\u274C Quantity must be a positive integer.", ephemeral=True)
-            return
-
-        if point_type not in ("insight", "contribution"):
-            await interaction.response.send_message("\u274C Invalid point type. Use 'insight' or 'contribution'.", ephemeral=True)
             return
 
         scores = load_scores()
@@ -308,6 +318,107 @@ async def remove_points(interaction: discord.Interaction, user: discord.User):
         await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
         return
     await interaction.response.send_modal(PointsModal("Remove", user))
+
+
+# --- New Leaderboard Pagination ---
+
+class LeaderboardView(View):
+    def __init__(self, entries, category):
+        super().__init__(timeout=180)
+        self.entries = entries  # List of (user_id, insight_points, contribution_points)
+        self.category = category
+        self.page = 0
+        self.max_pages = (len(entries) - 1) // 10 + 1 if entries else 1
+
+    def format_page(self):
+        start = self.page * 10
+        end = start + 10
+        page_entries = self.entries[start:end]
+        lines = []
+        for idx, (uid, insight, contrib) in enumerate(page_entries, start=start+1):
+            user_mention = f"<@{uid}>"
+            if self.category == "all":
+                total = insight + contrib
+                lines.append(f"**{idx}.** {user_mention} — {insight} insight / {contrib} contribution (Total: {total})")
+            elif self.category == "insight":
+                lines.append(f"**{idx}.** {user_mention} — {insight} insight points")
+            else:  # contribution
+                lines.append(f"**{idx}.** {user_mention} — {contrib} contribution points")
+        return "\n".join(lines) if lines else "No entries to display."
+
+    async def update_message(self, interaction):
+        content = f"**Leaderboard - {self.category.capitalize()} Points (Page {self.page + 1}/{self.max_pages})**\n\n"
+        content += self.format_page()
+        await interaction.response.edit_message(content=content, view=self)
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: Button):
+        if self.page > 0:
+            self.page -= 1
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: Button):
+        if self.page + 1 < self.max_pages:
+            self.page += 1
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+class LeaderboardCategorySelect(Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="All", description="Combined Insight + Contribution Points", value="all"),
+            discord.SelectOption(label="Insight", description="Rank by Insight Points only", value="insight"),
+            discord.SelectOption(label="Contribution", description="Rank by Contribution Points only", value="contribution")
+        ]
+        super().__init__(placeholder="Select leaderboard category", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        category = self.values[0]
+        scores = load_scores()
+
+        # Filter out users with 0 points in the category
+        entries = []
+        for uid, data in scores.items():
+            insight = data.get("insight_points", 0)
+            contrib = data.get("contribution_points", 0)
+            total = insight + contrib
+            if category == "all" and total > 0:
+                entries.append((int(uid), insight, contrib))
+            elif category == "insight" and insight > 0:
+                entries.append((int(uid), insight, contrib))
+            elif category == "contribution" and contrib > 0:
+                entries.append((int(uid), insight, contrib))
+
+        # Sort entries
+        if category == "all":
+            entries.sort(key=lambda x: x[1] + x[2], reverse=True)
+        elif category == "insight":
+            entries.sort(key=lambda x: x[1], reverse=True)
+        else:  # contribution
+            entries.sort(key=lambda x: x[2], reverse=True)
+
+        if not entries:
+            await interaction.response.edit_message(content=f"No users with points in category **{category}**.", view=None)
+            return
+
+        view = LeaderboardView(entries, category)
+        content = f"**Leaderboard - {category.capitalize()} Points (Page 1/{view.max_pages})**\n\n{view.format_page()}"
+        await interaction.response.edit_message(content=content, view=view)
+
+class LeaderboardCategoryView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(LeaderboardCategorySelect())
+
+@tree.command(name="leaderboard", description="View the leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    view = LeaderboardCategoryView()
+    await interaction.response.send_message("Select a leaderboard category:", view=view, ephemeral=True)
+
 
 keep_alive()
 client.run(TOKEN)
