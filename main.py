@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button
+from discord.ui import View, Button, Modal, TextInput, Select, SelectOption
 from keep_alive import keep_alive
 import logging
 from datetime import time
@@ -163,7 +163,7 @@ async def on_message(message):
 @tree.command(name="questionofthedaycommands", description="List available question commands")
 async def question_commands(interaction: discord.Interaction):
     await interaction.response.send_message(
-        "Available commands:\n/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
+        "Available commands:\n/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks\n/addpoints\n/removepoints",
         ephemeral=True
     )
 
