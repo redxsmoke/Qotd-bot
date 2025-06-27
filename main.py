@@ -200,13 +200,12 @@ async def question_list(interaction: discord.Interaction):
 class SubmitQuestionModal(Modal, title="Submit a Question"):
     question_input = TextInput(label="Question", style=discord.TextStyle.paragraph, required=True, max_length=500)
     has_answer = Select(
-        placeholder="Does this question have an answer?",
-        options=[
-            discord.SelectOption(label="No, just a question", value="no"),
-            discord.SelectOption(label="Yes, with answer", value="yes"),
-        ],
-        required=True
-    )
+    placeholder="Does this question have an answer?",
+    options=[
+        discord.SelectOption(label="No, just a question", value="no"),
+        discord.SelectOption(label="Yes, with answer", value="yes"),
+    ]
+)
 
     def __init__(self, user):
         super().__init__()
