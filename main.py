@@ -365,13 +365,12 @@ async def leaderboard(interaction: discord.Interaction, category: str = "all"):
 class PointsModal(Modal):
     user_id_input = TextInput(label="User ID to modify points for", style=discord.TextStyle.short, required=True)
     point_type_select = Select(
-        placeholder="Select point type",
-        options=[
-            discord.SelectOption(label="Insight Points", value="insight_points"),
-            discord.SelectOption(label="Contribution Points", value="contribution_points"),
-        ],
-        required=True
-    )
+    placeholder="Select point type",
+    options=[
+        discord.SelectOption(label="Insight Points", value="insight"),
+        discord.SelectOption(label="Contribution Points", value="contribution"),
+    ]
+)
     quantity_input = TextInput(label="Quantity (positive integer)", style=discord.TextStyle.short, required=True)
 
     def __init__(self, action: str):
