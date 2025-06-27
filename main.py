@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button, Modal, TextInput, Select, SelectOption
+from discord.ui import View, Button, Modal, TextInput, Select
 from keep_alive import keep_alive
 import logging
 from datetime import time
