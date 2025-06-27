@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import View, Button, Modal, TextInput, Select
 from keep_alive import keep_alive
 import logging
 from datetime import time
@@ -139,7 +139,6 @@ async def on_ready():
     await tree.sync()
     purge_channel_before_post.start()
     post_daily_message.start()
-    # Removed the line: await post_question()
 
 @tasks.loop(time=time(hour=11, minute=59))
 async def purge_channel_before_post():
@@ -164,7 +163,7 @@ async def on_message(message):
 async def question_commands(interaction: discord.Interaction):
     await interaction.response.send_message(
         "Available commands:\n"
-        "/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks\n/addpoints\n/removepoints",
+        "/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
         ephemeral=True
     )
 
@@ -191,7 +190,7 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
         question_text = self.question_input.value.strip()
         questions = load_questions()
 
-        # Find the max numeric ID in questions.json and assign next ID (as integer)
+        # Find max numeric ID and assign next
         existing_ids = []
         for q in questions:
             try:
@@ -203,7 +202,7 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
         questions.append({"id": next_id, "question": question_text, "submitter": str(self.user.id)})
         save_questions(questions)
 
-        # Add contributor point, limited to once per day
+        # Add contributor point, limited once per day
         scores = load_scores()
         uid = str(self.user.id)
         today = datetime.date.today()
@@ -260,5 +259,157 @@ async def score(interaction: discord.Interaction):
     total = insight + contrib
     await interaction.response.send_message(f"⭐ Insight: {insight}\n💡 Contribution: {contrib}\n🏆 Rank: {get_rank(total)}", ephemeral=True)
 
-keep_alive()
-client.run(TOKEN)
+# Leaderboard select menu view + logic
+class LeaderboardSelect(Select):
+    def __init__(self, interaction, scores):
+        options = [
+            discord.SelectOption(label="All", description="Combined Insight and Contribution points"),
+            discord.SelectOption(label="Insight", description="Insight points only"),
+            discord.SelectOption(label="Contributor", description="Contribution points only"),
+        ]
+        super().__init__(placeholder="Choose leaderboard category...", min_values=1, max_values=1, options=options)
+        self.interaction = interaction
+        self.scores = scores
+        self.page = 0
+
+    async def update_message(self, interaction):
+        category = self.values[0]
+        leaderboard = []
+
+        # Filter and sort users by category
+        if category == "All":
+            for uid, score in self.scores.items():
+                insight = score.get("insight_points", 0)
+                contrib = score.get("contribution_points", 0)
+                total = insight + contrib
+                if total > 0:
+                    leaderboard.append((uid, insight, contrib, total))
+            leaderboard.sort(key=lambda x: x[3], reverse=True)
+        elif category == "Insight":
+            for uid, score in self.scores.items():
+                insight = score.get("insight_points", 0)
+                if insight > 0:
+                    leaderboard.append((uid, insight))
+            leaderboard.sort(key=lambda x: x[1], reverse=True)
+        else:  # Contributor
+            for uid, score in self.scores.items():
+                contrib = score.get("contribution_points", 0)
+                if contrib > 0:
+                    leaderboard.append((uid, contrib))
+            leaderboard.sort(key=lambda x: x[1], reverse=True)
+
+        # Pagination setup
+        items_per_page = 10
+        max_page = (len(leaderboard) - 1) // items_per_page if leaderboard else 0
+        self.page = max(0, min(self.page, max_page))
+
+        start_idx = self.page * items_per_page
+        end_idx = start_idx + items_per_page
+        page_entries = leaderboard[start_idx:end_idx]
+
+        # Format leaderboard text
+        if not leaderboard:
+            text = "No users found with points in this category."
+        else:
+            lines = []
+            for i, entry in enumerate(page_entries, start=start_idx + 1):
+                if category == "All":
+                    uid, insight, contrib, total = entry
+                    lines.append(f"{i}. <@{uid}> — {insight} insight points / {contrib} contribution points")
+                else:
+                    uid, pts = entry
+                    lines.append(f"{i}. <@{uid}> — {pts} points")
+            text = "\n".join(lines)
+
+        footer_text = f"Page {self.page + 1} / {max_page + 1}"
+
+        embed = discord.Embed(title=f"Leaderboard — {category} Points", description=text, color=discord.Color.green())
+        embed.set_footer(text=footer_text)
+
+        # Buttons for pagination
+        view = LeaderboardView(self.interaction, self.scores, category, self.page, max_page)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class LeaderboardView(View):
+    def __init__(self, interaction, scores, category, page, max_page):
+        super().__init__(timeout=120)
+        self.interaction = interaction
+        self.scores = scores
+        self.category = category
+        self.page = page
+        self.max_page = max_page
+
+        # Add category select
+        self.add_item(CategorySelect(self.interaction, self.scores))
+
+        # Add buttons for pagination
+        self.prev_button = Button(label="Previous", style=discord.ButtonStyle.secondary)
+        self.next_button = Button(label="Next", style=discord.ButtonStyle.secondary)
+        self.prev_button.callback = self.prev_page
+        self.next_button.callback = self.next_page
+        self.add_item(self.prev_button)
+        self.add_item(self.next_button)
+
+        # Disable buttons if needed
+        self.prev_button.disabled = (self.page == 0)
+        self.next_button.disabled = (self.page == self.max_page)
+
+    async def prev_page(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        await self.update_leaderboard(interaction)
+
+    async def next_page(self, interaction: discord.Interaction):
+        self.page = min(self.max_page, self.page + 1)
+        await self.update_leaderboard(interaction)
+
+    async def update_leaderboard(self, interaction):
+        # Build leaderboard again for current page and category
+        category = self.category
+        leaderboard = []
+
+        if category == "All":
+            for uid, score in self.scores.items():
+                insight = score.get("insight_points", 0)
+                contrib = score.get("contribution_points", 0)
+                total = insight + contrib
+                if total > 0:
+                    leaderboard.append((uid, insight, contrib, total))
+            leaderboard.sort(key=lambda x: x[3], reverse=True)
+        elif category == "Insight":
+            for uid, score in self.scores.items():
+                insight = score.get("insight_points", 0)
+                if insight > 0:
+                    leaderboard.append((uid, insight))
+            leaderboard.sort(key=lambda x: x[1], reverse=True)
+        else:  # Contributor
+            for uid, score in self.scores.items():
+                contrib = score.get("contribution_points", 0)
+                if contrib > 0:
+                    leaderboard.append((uid, contrib))
+            leaderboard.sort(key=lambda x: x[1], reverse=True)
+
+        items_per_page = 10
+        max_page = (len(leaderboard) - 1) // items_per_page if leaderboard else 0
+        self.max_page = max_page
+        self.page = max(0, min(self.page, max_page))
+
+        start_idx = self.page * items_per_page
+        end_idx = start_idx + items_per_page
+        page_entries = leaderboard[start_idx:end_idx]
+
+        if not leaderboard:
+            text = "No users found with points in this category."
+        else:
+            lines = []
+            for i, entry in enumerate(page_entries, start=start_idx + 1):
+                if category == "All":
+                    uid, insight, contrib, total = entry
+                    lines.append(f"{i}. <@{uid}> — {insight} insight points / {contrib} contribution points")
+                else:
+                    uid, pts = entry
+                    lines.append(f"{i}. <@{uid}> — {pts} points")
+            text = "\n".join(lines)
+
+        footer_text = f"Page {self.page + 1} / {max_page + 1}"
+
+        embed = discord.Embed
