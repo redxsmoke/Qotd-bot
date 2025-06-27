@@ -26,7 +26,7 @@ START_DATE = datetime.date(2025, 6, 25)
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
+intents.guilds = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -131,30 +131,6 @@ async def post_question():
     channel = client.get_channel(CHANNEL_ID)
     await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
 
-# --- Weekly Leaderboard Announcement ---
-@tasks.loop(time=time(hour=13, minute=0))  # 1:00 PM UTC
-async def weekly_awards():
-    if datetime.datetime.utcnow().weekday() != 0:  # Only run on Monday
-        return
-    scores = load_scores()
-    user_data = []
-    for uid, data in scores.items():
-        total = data["insight_points"] + data["contribution_points"]
-        if total > 0:
-            user_data.append((uid, data["insight_points"], data["contribution_points"], total))
-
-    top = sorted(user_data, key=lambda x: x[3], reverse=True)[:3]
-    if not top:
-        return
-
-    lines = ["🏆 **Congratulations to last week's top point earners!**"]
-    for uid, insight, contrib, total in top:
-        lines.append(f"<@{uid}> — ⭐ {insight} Insight | 💡 {contrib} Contributor | 🏆 {get_rank(total)}")
-
-    channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send("\n".join(lines))
-
 # --- Events & Loops ---
 @client.event
 async def on_ready():
@@ -162,7 +138,6 @@ async def on_ready():
     await tree.sync()
     purge_channel_before_post.start()
     post_daily_message.start()
-    weekly_awards.start()
     await post_question()
 
 @tasks.loop(time=time(hour=11, minute=59))
@@ -185,35 +160,34 @@ async def on_message(message):
         await message.channel.send("\u2705 Received anonymously.")
 
 # --- Slash Commands ---
-@tree.command(name="submitquestion", description="Submit a question for the Question of the Day")
-@app_commands.describe(question="What question would you like to submit?")
-async def submit_question(interaction: discord.Interaction, question: str):
+@tree.command(name="questionofthedaycommands", description="List available question commands")
+async def question_commands(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Available commands:\n/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
+        ephemeral=True
+    )
+
+@tree.command(name="ranks", description="View the sushi-themed ranking tiers")
+async def ranks(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "\U0001F3C6 **Sushi Ranks**\n"
+        "0-10: \U0001F363 Rice Rookie\n"
+        "11-25: \U0001F364 Miso Mind\n"
+        "26-40: \U0001F363 Sashimi Scholar\n"
+        "41-75: \U0001F95A Wasabi Wizard\n"
+        "76+: \U0001F371 Sushi Sensei",
+        ephemeral=True
+    )
+
+@tree.command(name="questionlist", description="Admin-only view of questions with IDs")
+async def question_list(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
+        return
     questions = load_questions()
-    new_id = max([q["id"] for q in questions], default=0) + 1
-    q_obj = {"id": new_id, "question": question, "submitter": interaction.user.id}
-    questions.append(q_obj)
-    save_questions(questions)
+    lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
+    await interaction.response.send_message("\U0001F4CB Questions:\n" + "\n".join(lines), ephemeral=True)
 
-    # Update score
-    scores = load_scores()
-    uid = str(interaction.user.id)
-    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
-    scores[uid]["contribution_points"] += 1
-    save_scores(scores)
-
-    await interaction.response.send_message(f"✅ Question submitted (ID: {new_id}) — 💡 +1 Contributor Point!", ephemeral=True)
-
-    # Notify admins/mods
-    for guild in client.guilds:
-        for member in guild.members:
-            if member.guild_permissions.manage_messages:
-                try:
-                    await member.send(f"🧠 {interaction.user.mention} has submitted a new Question of the Day. Use `/removequestion` if moderation is needed.")
-                except:
-                    continue
-
-# You can re-add other commands here (leaderboard, score, removequestion, etc.)
-
-# --- Keep alive & run ---
+# Keep alive & run
 keep_alive()
 client.run(TOKEN)
