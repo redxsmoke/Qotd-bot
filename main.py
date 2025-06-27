@@ -159,12 +159,118 @@ async def on_message(message):
         await message.channel.send("\u2705 Received anonymously.")
 
 # --- Slash Commands ---
+
 @tree.command(name="questionofthedaycommands", description="List available question commands")
 async def question_commands(interaction: discord.Interaction):
     await interaction.response.send_message(
         "Available commands:\n/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
         ephemeral=True
     )
+
+@tree.command(name="submitquestion", description="Submit a new question")
+@app_commands.describe(question="Your question")
+async def submit_question(interaction: discord.Interaction, question: str):
+    questions = load_questions()
+    new_id = max([q["id"] for q in questions], default=0) + 1
+    q_obj = {"id": new_id, "question": question, "submitter": interaction.user.id}
+    questions.append(q_obj)
+    save_questions(questions)
+
+    scores = load_scores()
+    uid = str(interaction.user.id)
+    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
+    scores[uid]["contribution_points"] += 1
+    save_scores(scores)
+
+    await interaction.response.send_message(f"\u2705 Question submitted (ID: {new_id}) — +1 💡 Contribution!", ephemeral=True)
+
+@tree.command(name="removequestion", description="Remove a question by its ID (admin only)")
+@app_commands.describe(question_id="ID of the question to remove")
+async def remove_question(interaction: discord.Interaction, question_id: int):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
+        return
+    questions = load_questions()
+    new_questions = [q for q in questions if q["id"] != question_id]
+    if len(new_questions) == len(questions):
+        await interaction.response.send_message(f"\u274C Question ID {question_id} not found.", ephemeral=True)
+        return
+    save_questions(new_questions)
+    await interaction.response.send_message(f"\u2705 Question ID {question_id} removed.", ephemeral=True)
+
+@tree.command(name="questionlist", description="Admin-only view of questions with IDs")
+async def question_list(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
+        return
+    questions = load_questions()
+    if not questions:
+        await interaction.response.send_message("\u274C No questions found.", ephemeral=True)
+        return
+    lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
+    await interaction.response.send_message("\U0001F4CB Questions:\n" + "\n".join(lines), ephemeral=True)
+
+@tree.command(name="score", description="View your points")
+async def score(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    scores = load_scores()
+    user_scores = scores.get(uid, {"insight_points": 0, "contribution_points": 0})
+    await interaction.response.send_message(
+        f"⭐ Insight Points: {user_scores['insight_points']}\n"
+        f"💡 Contribution Points: {user_scores['contribution_points']}",
+        ephemeral=True
+    )
+
+@tree.command(name="leaderboard", description="See the leaderboard")
+@app_commands.describe(category="Sort by: all, insight, contributor")
+@app_commands.choices(category=[
+    app_commands.Choice(name="All", value="all"),
+    app_commands.Choice(name="Insight", value="insight"),
+    app_commands.Choice(name="Contributor", value="contributor")
+])
+async def leaderboard(interaction: discord.Interaction, category: app_commands.Choice[str]):
+    scores = load_scores()
+    users = []
+    for uid, data in scores.items():
+        total = data["insight_points"] + data["contribution_points"]
+        users.append({
+            "id": uid,
+            "insight": data["insight_points"],
+            "contributor": data["contribution_points"],
+            "total": total
+        })
+
+    key = "total" if category.value == "all" else ("insight" if category.value == "insight" else "contributor")
+    sorted_users = sorted(users, key=itemgetter(key), reverse=True)
+
+    pages = [sorted_users[i:i+10] for i in range(0, len(sorted_users), 10)]
+
+    class LeaderboardView(View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            self.page = 0
+
+        async def update(self, interaction):
+            lines = [f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}" for u in pages[self.page]]
+            await interaction.response.edit_message(content=f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=self)
+
+        @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+        async def previous(self, interaction, _):
+            if self.page > 0:
+                self.page -= 1
+                await self.update(interaction)
+
+        @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+        async def next(self, interaction, _):
+            if self.page < len(pages) - 1:
+                self.page += 1
+                await self.update(interaction)
+
+    if not pages:
+        await interaction.response.send_message("\u274C No scores yet!", ephemeral=True)
+    else:
+        lines = [f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}" for u in pages[0]]
+        await interaction.response.send_message(f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=LeaderboardView(), ephemeral=False)
 
 @tree.command(name="ranks", description="View the sushi-themed ranking tiers")
 async def ranks(interaction: discord.Interaction):
@@ -177,15 +283,6 @@ async def ranks(interaction: discord.Interaction):
         "76+: \U0001F371 Sushi Sensei",
         ephemeral=True
     )
-
-@tree.command(name="questionlist", description="Admin-only view of questions with IDs")
-async def question_list(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
-        return
-    questions = load_questions()
-    lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
-    await interaction.response.send_message("\U0001F4CB Questions:\n" + "\n".join(lines), ephemeral=True)
 
 # Keep alive & run
 keep_alive()
