@@ -3,7 +3,7 @@ import json
 import datetime
 from discord.ext import tasks
 from discord import app_commands
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import View, Button, Modal, TextInput, Select
 from keep_alive import keep_alive
 import logging
 from datetime import time
@@ -27,6 +27,7 @@ START_DATE = datetime.date(2025, 6, 25)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
+intents.members = True  # Needed for member list
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -197,7 +198,7 @@ async def question_list(interaction: discord.Interaction):
     lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
     await interaction.response.send_message("\U0001F4CB Questions:\n" + "\n".join(lines), ephemeral=True)
 
-# Submit Question with Modal prompt
+# --- Modified Submit Question with DM to Admins/Mods ---
 class SubmitQuestionModal(Modal, title="Submit a Question"):
     question_input = TextInput(label="Your question", style=discord.TextStyle.paragraph, required=True, max_length=500)
 
@@ -211,46 +212,30 @@ class SubmitQuestionModal(Modal, title="Submit a Question"):
         new_id = generate_unique_id()
         questions.append({"id": new_id, "question": question_text, "submitter": str(self.user.id)})
         save_questions(questions)
-        admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
-        await admin_channel.send(f"🧠 <@{self.user.id}> has submitted a new Question of the Day. Use /questionlist to view the question and /removequestion if moderation is needed.")
+
+        # DM all admins/mods in the guild
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("\u274C This command must be used in a server.", ephemeral=True)
+            return
+
+        # Collect admins/mods
+        admins_mods = [member for member in guild.members if member.guild_permissions.administrator or member.guild_permissions.manage_messages]
+        dm_message = f"🧠 <@{self.user.id}> has submitted a new Question of the Day. Use /questionlist command to view the question and use /removequestion if moderation is needed."
+
+        for admin in admins_mods:
+            try:
+                await admin.send(dm_message)
+            except Exception:
+                pass  # Ignore if can't DM
+
         await interaction.response.send_message(f"\u2705 Question submitted successfully! ID: `{new_id}`", ephemeral=True)
 
 @tree.command(name="submitquestion", description="Submit a new question")
 async def submit_question(interaction: discord.Interaction):
     await interaction.response.send_modal(SubmitQuestionModal(interaction.user))
 
-@tree.command(name="removequestion", description="Admin-only: Remove a question by ID")
-@app_commands.describe(question_id="ID of the question to remove")
-async def remove_question(interaction: discord.Interaction, question_id: str):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
-        return
-    questions = load_questions()
-    for q in questions:
-        if q["id"] == question_id:
-            questions.remove(q)
-            save_questions(questions)
-            await interaction.response.send_message(f"\u2705 Question `{question_id}` removed successfully.", ephemeral=True)
-            return
-    await interaction.response.send_message(f"\u26A0 Question ID `{question_id}` not found.", ephemeral=True)
-
-@tree.command(name="score", description="Show your scores and rank")
-async def score(interaction: discord.Interaction):
-    scores = load_scores()
-    uid = str(interaction.user.id)
-    user_scores = scores.get(uid, {"insight_points": 0, "contribution_points": 0})
-    total = user_scores.get("insight_points", 0) + user_scores.get("contribution_points", 0)
-    rank = get_rank(total)
-    msg = (
-        f"Scores for <@{uid}>:\n"
-        f"⭐ Insight Points: {user_scores.get('insight_points', 0)}\n"
-        f"💡 Contribution Points: {user_scores.get('contribution_points', 0)}\n"
-        f"🏆 Rank: {rank}\n"
-        f"🔢 Total Points: {total}"
-    )
-    await interaction.response.send_message(msg, ephemeral=True)
-
-# Leaderboard Pagination Helper
+# --- Leaderboard Pagination Helper (unchanged) ---
 class LeaderboardView(View):
     def __init__(self, leaderboard_data, category):
         super().__init__(timeout=180)
@@ -298,7 +283,6 @@ async def leaderboard(interaction: discord.Interaction, category: str = "all"):
         await interaction.response.send_message("\u274C Invalid category! Choose from all, insight, contributor.", ephemeral=True)
         return
     scores = load_scores()
-    # Filter users based on category and points
     filtered = {}
     for uid, score in scores.items():
         insight = score.get("insight_points", 0)
@@ -313,7 +297,6 @@ async def leaderboard(interaction: discord.Interaction, category: str = "all"):
     if not filtered:
         await interaction.response.send_message("\u26A0 No entries found for this category.", ephemeral=True)
         return
-    # Sort
     if category == "all":
         sorted_scores = sorted(filtered.items(), key=lambda x: x[1].get("insight_points", 0) + x[1].get("contribution_points", 0), reverse=True)
     elif category == "insight":
@@ -323,19 +306,58 @@ async def leaderboard(interaction: discord.Interaction, category: str = "all"):
     view = LeaderboardView(sorted_scores, category)
     await interaction.response.send_message(view.format_page(), view=view, ephemeral=True)
 
-# AddPoints and RemovePoints Modal
-class PointsModal(Modal):
-    user_id_input = TextInput(label="User ID to modify points for", style=discord.TextStyle.short, required=True)
-    point_type_input = TextInput(label="Point Type (insight or contribution)", style=discord.TextStyle.short, required=True)
+# --- New Multi-Step AddPoints and RemovePoints Flow ---
+
+class PointsUserSelect(discord.ui.Select):
+    def __init__(self, users):
+        options = [discord.SelectOption(label=user.display_name, value=str(user.id)) for user in users]
+        super().__init__(placeholder="Select a user", min_values=1, max_values=1, options=options)
+        self.selected_user_id = None
+
+    async def callback(self, interaction: discord.Interaction):
+        self.selected_user_id = self.values[0]
+        # Proceed to point type select
+        await interaction.response.edit_message(content="Select point type to modify:", view=PointsTypeSelectView(self.selected_user_id, self.view.action))
+
+class PointsTypeSelect(discord.ui.Select):
+    def __init__(self, user_id, action):
+        options = [
+            discord.SelectOption(label="Insight", value="insight"),
+            discord.SelectOption(label="Contribution", value="contribution"),
+        ]
+        super().__init__(placeholder="Select point type", min_values=1, max_values=1, options=options)
+        self.user_id = user_id
+        self.action = action
+        self.selected_point_type = None
+
+    async def callback(self, interaction: discord.Interaction):
+        self.selected_point_type = self.values[0]
+        # Proceed to quantity modal
+        await interaction.response.send_modal(PointsQuantityModal(self.user_id, self.selected_point_type, self.action))
+
+class PointsUserSelectView(View):
+    def __init__(self, users, action):
+        super().__init__(timeout=60)
+        self.action = action
+        self.add_item(PointsUserSelect(users))
+
+class PointsTypeSelectView(View):
+    def __init__(self, user_id, action):
+        super().__init__(timeout=60)
+        self.action = action
+        self.user_id = user_id
+        self.add_item(PointsTypeSelect(user_id, action))
+
+class PointsQuantityModal(Modal):
     quantity_input = TextInput(label="Quantity (positive integer)", style=discord.TextStyle.short, required=True)
 
-    def __init__(self, action: str):
+    def __init__(self, user_id, point_type, action):
         super().__init__(title=f"{action} Points")
+        self.user_id = user_id
+        self.point_type = point_type
         self.action = action
 
     async def on_submit(self, interaction: discord.Interaction):
-        uid = self.user_id_input.value.strip()
-        ptype = self.point_type_input.value.strip().lower()
         try:
             qty = int(self.quantity_input.value)
             if qty <= 0:
@@ -344,35 +366,45 @@ class PointsModal(Modal):
             await interaction.response.send_message("\u274C Quantity must be a positive integer.", ephemeral=True)
             return
 
-        if ptype not in ("insight", "contribution"):
-            await interaction.response.send_message("\u274C Point type must be 'insight' or 'contribution'.", ephemeral=True)
-            return
-
         scores = load_scores()
-        if uid not in scores:
-            scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
+        if self.user_id not in scores:
+            scores[self.user_id] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
+
+        key = f"{self.point_type}_points"
+        current = scores[self.user_id].get(key, 0)
 
         if self.action == "Add":
-            scores[uid][f"{ptype}_points"] = scores[uid].get(f"{ptype}_points", 0) + qty
-        else:
-            scores[uid][f"{ptype}_points"] = max(0, scores[uid].get(f"{ptype}_points", 0) - qty)
+            scores[self.user_id][key] = current + qty
+        else:  # Remove
+            scores[self.user_id][key] = max(0, current - qty)
 
         save_scores(scores)
-        await interaction.response.send_message(f"\u2705 {self.action}ed {qty} {ptype} points for <@{uid}>.", ephemeral=True)
+        await interaction.response.send_message(f"\u2705 {self.action}ed {qty} {self.point_type} points for <@{self.user_id}>.", ephemeral=True)
 
 @tree.command(name="addpoints", description="Admin-only: Add points to a user")
 async def add_points(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
         return
-    await interaction.response.send_modal(PointsModal("Add"))
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("\u274C This command must be used in a server.", ephemeral=True)
+        return
+    # Get all members with a display name (could be optimized to exclude bots, etc.)
+    members = [m for m in guild.members if not m.bot]
+    await interaction.response.send_message("Select a user to add points:", view=PointsUserSelectView(members, "Add"), ephemeral=True)
 
 @tree.command(name="removepoints", description="Admin-only: Remove points from a user")
 async def remove_points(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
         return
-    await interaction.response.send_modal(PointsModal("Remove"))
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("\u274C This command must be used in a server.", ephemeral=True)
+        return
+    members = [m for m in guild.members if not m.bot]
+    await interaction.response.send_message("Select a user to remove points:", view=PointsUserSelectView(members, "Remove"), ephemeral=True)
 
 # Keep alive & run
 keep_alive()
