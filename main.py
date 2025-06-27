@@ -144,26 +144,16 @@ async def on_message(message):
     if message.author == client.user:
         return
     if message.guild is None:
-        # Do not relay anonymous answers here anymore, modal handles it now.
+        # No more relaying anonymous answers here — handled in modal submission
         return
 
 # --- Slash Commands ---
 @tree.command(name="submitquestion", description="Submit a new question")
-@app_commands.describe(question="Your question", type="plain or multiple choice", choice1="Option 1", choice2="Option 2", choice3="Optional", choice4="Optional")
-@app_commands.choices(type=[
-    app_commands.Choice(name="question", value="plain"),
-    app_commands.Choice(name="question with answer (mult-choice)", value="multiple_choice")
-])
-async def submit_question(interaction: discord.Interaction, question: str, type: app_commands.Choice[str], choice1: str = None, choice2: str = None, choice3: str = None, choice4: str = None):
+@app_commands.describe(question="Your question")
+async def submit_question(interaction: discord.Interaction, question: str):
     questions = load_questions()
     new_id = max([q["id"] for q in questions], default=0) + 1
     q_obj = {"id": new_id, "question": question, "submitter": interaction.user.id}
-
-    if type.value == "multiple_choice":
-        if not choice1 or not choice2:
-            await interaction.response.send_message("❌ You must provide at least 2 choices.", ephemeral=True)
-            return
-        q_obj["answers"] = [c for c in [choice1, choice2, choice3, choice4] if c]
 
     questions.append(q_obj)
     save_questions(questions)
