@@ -4,7 +4,6 @@ import datetime
 from discord.ext import tasks
 from discord import app_commands
 from discord.ui import View, Button, Modal, TextInput, Select
-from keep_alive import keep_alive
 import logging
 from datetime import time
 import os
@@ -133,7 +132,6 @@ async def post_question():
     channel = client.get_channel(CHANNEL_ID)
     await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
 
-# Admin-only modal to modify user points
 class ModifyPointsModal(Modal):
     def __init__(self, user, field, operation):
         super().__init__(title=f"{operation.capitalize()} {field.replace('_', ' ').capitalize()}")
@@ -179,8 +177,6 @@ class ModifyPointsModal(Modal):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
-# Command factory
-
 def admin_point_command(name, description, field, operation):
     @tree.command(name=name, description=description)
     async def command(interaction: discord.Interaction):
@@ -189,7 +185,6 @@ def admin_point_command(name, description, field, operation):
             return
         await interaction.response.send_modal(ModifyPointsModal(interaction.user, field, operation))
 
-# Register point commands
 admin_point_command("addinsightpoints", "Add Insight Points to a user", "insight_points", "add")
 admin_point_command("addcontributorpoints", "Add Contributor Points to a user", "contribution_points", "add")
 admin_point_command("removeinsightpoints", "Remove Insight Points from a user", "insight_points", "remove")
@@ -203,5 +198,9 @@ async def leaderboard(interaction: discord.Interaction):
     view.add_item(select)
     await interaction.response.send_message("Select leaderboard category:", view=view, ephemeral=False)
 
-keep_alive()
+@client.event
+async def on_ready():
+    print("\u2705 Discord bot connected")
+    await tree.sync()
+
 client.run(TOKEN)
