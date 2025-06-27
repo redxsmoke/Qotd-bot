@@ -254,6 +254,50 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
             lines.append(f"<@{u['id']}> — 🧠 {u['insight']} | 🔥 {u['contributor']}")
         await interaction.response.send_message(f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=LeaderboardView(), ephemeral=False)
 
+# Admin-only addpoints command
+@tree.command(name="addpoints", description="Add points to a user (admin only)")
+@app_commands.describe(user="User to add points to", point_type="Type of points", quantity="Quantity of points to add")
+@app_commands.choices(point_type=[
+    app_commands.Choice(name="Insight", value="insight_points"),
+    app_commands.Choice(name="Contributor", value="contribution_points")
+])
+async def addpoints(interaction: discord.Interaction, user: discord.Member, point_type: app_commands.Choice[str], quantity: int):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+    if quantity <= 0:
+        await interaction.response.send_message("❌ Quantity must be positive.", ephemeral=True)
+        return
+
+    scores = load_scores()
+    uid = str(user.id)
+    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
+    scores[uid][point_type.value] += quantity
+    save_scores(scores)
+    await interaction.response.send_message(f"✅ Added {quantity} {point_type.name} point(s) to {user.mention}.", ephemeral=True)
+
+# Admin-only removepoints command
+@tree.command(name="removepoints", description="Remove points from a user (admin only)")
+@app_commands.describe(user="User to remove points from", point_type="Type of points", quantity="Quantity of points to remove")
+@app_commands.choices(point_type=[
+    app_commands.Choice(name="Insight", value="insight_points"),
+    app_commands.Choice(name="Contributor", value="contribution_points")
+])
+async def removepoints(interaction: discord.Interaction, user: discord.Member, point_type: app_commands.Choice[str], quantity: int):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+    if quantity <= 0:
+        await interaction.response.send_message("❌ Quantity must be positive.", ephemeral=True)
+        return
+
+    scores = load_scores()
+    uid = str(user.id)
+    scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
+    scores[uid][point_type.value] = max(0, scores[uid][point_type.value] - quantity)
+    save_scores(scores)
+    await interaction.response.send_message(f"✅ Removed {quantity} {point_type.name} point(s) from {user.mention}.", ephemeral=True)
+
 # --- Keep alive & run ---
 keep_alive()
 client.run(TOKEN)
