@@ -238,18 +238,40 @@ async def score(interaction: discord.Interaction):
 async def leaderboard(interaction: discord.Interaction, category: app_commands.Choice[str]):
     scores = load_scores()
     users = []
-    for uid, data in scores.items():
-        total = data.get("insight_points", 0) + data.get("contribution_points", 0)
-        users.append({
-            "id": uid,
-            "insight": data.get("insight_points", 0),
-            "contributor": data.get("contribution_points", 0),
-            "total": total
-        })
+    # Filter users by category and exclude zero scores accordingly
+    if category.value == "all":
+        for uid, data in scores.items():
+            insight = data.get("insight_points", 0)
+            contrib = data.get("contribution_points", 0)
+            total = insight + contrib
+            if total > 0:
+                users.append({
+                    "id": uid,
+                    "insight": insight,
+                    "contributor": contrib,
+                    "total": total
+                })
+        sort_key = "total"
+    elif category.value == "insight":
+        for uid, data in scores.items():
+            insight = data.get("insight_points", 0)
+            if insight > 0:
+                users.append({
+                    "id": uid,
+                    "insight": insight,
+                })
+        sort_key = "insight"
+    else:  # contributor
+        for uid, data in scores.items():
+            contrib = data.get("contribution_points", 0)
+            if contrib > 0:
+                users.append({
+                    "id": uid,
+                    "contributor": contrib,
+                })
+        sort_key = "contributor"
 
-    key = "total" if category.value == "all" else category.value
-    sorted_users = sorted(users, key=itemgetter(key), reverse=True)
-
+    sorted_users = sorted(users, key=itemgetter(sort_key), reverse=True)
     pages = [sorted_users[i:i+10] for i in range(0, len(sorted_users), 10)]
 
     class LeaderboardView(View):
@@ -258,10 +280,21 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
             self.page = 0
 
         async def update(self, interaction):
-            lines = [
-                f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}"
-                for u in pages[self.page]
-            ]
+            if category.value == "all":
+                lines = [
+                    f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}"
+                    for u in pages[self.page]
+                ]
+            elif category.value == "insight":
+                lines = [
+                    f"<@{u['id']}> — ⭐ {u['insight']}"
+                    for u in pages[self.page]
+                ]
+            else:  # contributor
+                lines = [
+                    f"<@{u['id']}> — 💡 {u['contributor']}"
+                    for u in pages[self.page]
+                ]
             await interaction.response.edit_message(content=f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=self)
 
         @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
@@ -279,10 +312,22 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
     if not pages:
         await interaction.response.send_message("No scores yet!", ephemeral=True)
     else:
-        lines = [
-            f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}"
-            for u in pages[0]
-        ]
+        # Show first page
+        if category.value == "all":
+            lines = [
+                f"<@{u['id']}> — ⭐ {u['insight']} | 💡 {u['contributor']}"
+                for u in pages[0]
+            ]
+        elif category.value == "insight":
+            lines = [
+                f"<@{u['id']}> — ⭐ {u['insight']}"
+                for u in pages[0]
+            ]
+        else:
+            lines = [
+                f"<@{u['id']}> — 💡 {u['contributor']}"
+                for u in pages[0]
+            ]
         await interaction.response.send_message(f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=LeaderboardView(), ephemeral=False)
 
 # --- Add/Remove Points Modals and Commands ---
@@ -291,6 +336,7 @@ class PointsModal(Modal):
         super().__init__(title=f"{action} Points")
         self.action = action
         self.user_id = TextInput(label="User ID", placeholder="Enter the user ID", required=True)
+        self.quantity = TextInput(label="Quantity", placeholder="Enter the number of points", required=True)
         self.point_type = Select(
             placeholder="Select point type",
             options=[
@@ -301,11 +347,10 @@ class PointsModal(Modal):
             max_values=1,
             required=True,
         )
-        self.quantity = TextInput(label="Quantity", placeholder="Enter the number of points", required=True)
 
         self.add_item(self.user_id)
-        self.add_item(self.point_type)
         self.add_item(self.quantity)
+        self.add_item(self.point_type)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.manage_messages:
