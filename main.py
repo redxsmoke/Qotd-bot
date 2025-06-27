@@ -11,7 +11,7 @@ import os
 from operator import itemgetter
 
 logging.basicConfig(level=logging.INFO)
-print("💡 main.py is running")
+print("✨ main.py is running")
 
 # Load token and channel IDs from environment variables
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -127,7 +127,7 @@ async def on_ready():
     await tree.sync()
     purge_channel_before_post.start()
     post_daily_message.start()
-    await post_question()  # Post immediately for testing
+    await post_question()
 
 @tasks.loop(time=time(hour=11, minute=59))
 async def purge_channel_before_post():
@@ -143,9 +143,6 @@ async def post_daily_message():
 async def on_message(message):
     if message.author == client.user:
         return
-    if message.guild is None:
-        # No more relaying anonymous answers here — handled in modal submission
-        return
 
 # --- Slash Commands ---
 @tree.command(name="submitquestion", description="Submit a new question")
@@ -154,7 +151,6 @@ async def submit_question(interaction: discord.Interaction, question: str):
     questions = load_questions()
     new_id = max([q["id"] for q in questions], default=0) + 1
     q_obj = {"id": new_id, "question": question, "submitter": interaction.user.id}
-
     questions.append(q_obj)
     save_questions(questions)
 
@@ -166,13 +162,23 @@ async def submit_question(interaction: discord.Interaction, question: str):
 
     await interaction.response.send_message(f"✅ Question submitted (ID: {new_id}) — +1 Contributor Point!", ephemeral=True)
 
-@tree.command(name="score", description="View your points")
-async def score(interaction: discord.Interaction):
-    uid = str(interaction.user.id)
-    scores = load_scores().get(uid, {"insight_points": 0, "contribution_points": 0})
-    await interaction.response.send_message(f"🧠 Insight Points: {scores['insight_points']}\n✨ Contributor Points: {scores['contribution_points']}", ephemeral=True)
+@tree.command(name="removequestion", description="Remove a question by ID (admin only)")
+@app_commands.describe(id="ID of the question to remove")
+async def remove_question(interaction: discord.Interaction, id: int):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
 
-@tree.command(name="leaderboard", description="See the leaderboard")
+    questions = load_questions()
+    updated = [q for q in questions if q['id'] != id]
+    if len(updated) == len(questions):
+        await interaction.response.send_message(f"❌ No question found with ID {id}.", ephemeral=True)
+        return
+
+    save_questions(updated)
+    await interaction.response.send_message(f"✅ Question with ID {id} removed.", ephemeral=True)
+
+@tree.command(name="leaderboard", description="View the leaderboard")
 @app_commands.describe(category="Sort by: all, insight, contributor")
 @app_commands.choices(category=[
     app_commands.Choice(name="All", value="all"),
@@ -191,9 +197,8 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
             "total": total
         })
 
-    key = "total" if category.value == "all" else ("insight" if category.value == "insight" else "contributor")
+    key = "total" if category.value == "all" else category.value
     sorted_users = sorted(users, key=itemgetter(key), reverse=True)
-
     pages = [sorted_users[i:i+10] for i in range(0, len(sorted_users), 10)]
 
     class LeaderboardView(View):
@@ -204,7 +209,12 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
         async def update(self, interaction):
             lines = []
             for u in pages[self.page]:
-                lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight | ✨ {u['contributor']} Contributor")
+                if category.value == "all":
+                    lines.append(f"<@{u['id']}> — 🧠 {u['insight']} | ✨ {u['contributor']} (Total: {u['total']})")
+                elif category.value == "insight":
+                    lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight")
+                else:
+                    lines.append(f"<@{u['id']}> — ✨ {u['contributor']} Contributor")
             await interaction.response.edit_message(content=f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=self)
 
         @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
@@ -224,10 +234,15 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
     else:
         lines = []
         for u in pages[0]:
-            lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight | ✨ {u['contributor']} Contributor")
+            if category.value == "all":
+                lines.append(f"<@{u['id']}> — 🧠 {u['insight']} | ✨ {u['contributor']} (Total: {u['total']})")
+            elif category.value == "insight":
+                lines.append(f"<@{u['id']}> — 🧠 {u['insight']} Insight")
+            else:
+                lines.append(f"<@{u['id']}> — ✨ {u['contributor']} Contributor")
         await interaction.response.send_message(f"**Leaderboard - {category.name}**\n\n" + "\n".join(lines), view=LeaderboardView(), ephemeral=False)
 
-@tree.command(name="questionofthedaycommands", description="List available question commands")
+@tree.command(name="questionofthedaycommands", description="List all available commands")
 async def question_commands(interaction: discord.Interaction):
     await interaction.response.send_message(
         "Available commands:\n"
@@ -235,12 +250,9 @@ async def question_commands(interaction: discord.Interaction):
         "/removequestion\n"
         "/questionqueue\n"
         "/score\n"
-        "/leaderboard\n"
-        "/addpoints\n"
-        "/removepoints",
+        "/leaderboard",
         ephemeral=True
     )
 
-# Keep alive & run
 keep_alive()
 client.run(TOKEN)
