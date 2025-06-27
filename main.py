@@ -613,5 +613,4 @@ async def remove_contributor_points(interaction: discord.Interaction):
     await interaction.response.send_modal(modal)
 
 
-keep_alive()
 client.run(TOKEN)
