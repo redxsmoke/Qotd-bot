@@ -29,167 +29,111 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-def load_questions():
-    try:
-        with open(QUESTIONS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return []
+# Slash command: /questionofthedaycommands
+@tree.command(name="questionofthedaycommands", description="List available question commands")
+async def question_commands(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Available commands:\n"
+        "/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
+        ephemeral=True
+    )
 
-def save_questions(questions):
-    with open(QUESTIONS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(questions, f, indent=2)
+# Slash command: /ranks
+@tree.command(name="ranks", description="View the sushi-themed ranking tiers")
+async def ranks(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "\U0001F3C6 **Sushi Ranks**\n"
+        "0-10: \U0001F363 Rice Rookie\n"
+        "11-25: \U0001F364 Miso Mind\n"
+        "26-40: \U0001F363 Sashimi Scholar\n"
+        "41-75: \U0001F95A Wasabi Wizard\n"
+        "76+: \U0001F371 Sushi Sensei",
+        ephemeral=True
+    )
 
-def load_scores():
-    try:
-        with open(SCORES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
+# Slash command: /submitquestion
+class SubmitQuestionModal(Modal, title="Submit a Question"):
+    question_input = TextInput(label="Your question", style=discord.TextStyle.paragraph, required=True, max_length=500)
 
-def save_scores(scores):
-    with open(SCORES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(scores, f, indent=2)
-
-def get_today_question():
-    questions = load_questions()
-    days_since = (datetime.date.today() - START_DATE).days
-    if days_since < len(questions):
-        return questions[days_since]
-    return None
-
-def get_rank(total):
-    if total <= 10:
-        return "\U0001F363 Rice Rookie"
-    elif total <= 25:
-        return "\U0001F364 Miso Mind"
-    elif total <= 40:
-        return "\U0001F363 Sashimi Scholar"
-    elif total <= 75:
-        return "\U0001F95A Wasabi Wizard"
-    else:
-        return "\U0001F371 Sushi Sensei"
-
-def generate_unique_id():
-    import uuid
-    return str(uuid.uuid4())[:8]
-
-async def post_question():
-    q = get_today_question()
-    if not q: return
-    question = q["question"]
-    submitter = q.get("submitter")
-    submitter_text = f"\U0001F9E0 Question submitted by <@{submitter}>" if submitter else "\U0001F916 Question submitted by the Question of the Day Bot"
-
-    class QuestionView(View):
-        def __init__(self, qid):
-            super().__init__(timeout=None)
-            self.qid = qid
-
-        @discord.ui.button(label="Answer Freely ⭐ 1 Insight Point", style=discord.ButtonStyle.primary, custom_id="freely")
-        async def free_button(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_modal(AnswerModal(qid=self.qid, user=interaction.user))
-
-        @discord.ui.button(label="Answer Anonymously 🔋 0 Insight Points", style=discord.ButtonStyle.secondary, custom_id="anon")
-        async def anon_button(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_modal(AnonModal(qid=self.qid, user=interaction.user))
-
-    class AnswerModal(discord.ui.Modal, title="Answer the Question"):
-        answer = discord.ui.TextInput(label="Your answer", style=discord.TextStyle.paragraph)
-
-        def __init__(self, qid, user):
-            super().__init__()
-            self.qid = qid
-            self.user = user
-
-        async def on_submit(self, interaction: discord.Interaction):
-            scores = load_scores()
-            uid = str(self.user.id)
-            scores.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered_questions": []})
-            if self.qid not in scores[uid]["answered_questions"]:
-                scores[uid]["insight_points"] += 1
-                scores[uid]["answered_questions"].append(self.qid)
-                save_scores(scores)
-                total = scores[uid]["insight_points"] + scores[uid]["contribution_points"]
-                msg = f"\U0001F5E3️ Answer from <@{uid}>:\n{self.answer}\n\n⭐ Insight Points: {scores[uid]['insight_points']} | 💡 Contribution: {scores[uid]['contribution_points']} | 🏆 Rank: {get_rank(total)}"
-            else:
-                msg = f"\U0001F5E3️ Answer from <@{uid}>:\n{self.answer}\n\n(You've already earned a point for this one!)"
-            await interaction.response.send_message(msg)
-
-    class AnonModal(discord.ui.Modal, title="Answer Anonymously"):
-        answer = discord.ui.TextInput(label="Your anonymous answer", style=discord.TextStyle.paragraph)
-
-        def __init__(self, qid, user):
-            super().__init__()
-            self.qid = qid
-            self.user = user
-
-        async def on_submit(self, interaction: discord.Interaction):
-            admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
-            await admin_channel.send(f"\U0001F4E9 Anonymous answer for Question ID {self.qid}:\n{self.answer}")
-            await interaction.response.send_message("\u2705 Received anonymously.", ephemeral=True)
-
-    channel = client.get_channel(CHANNEL_ID)
-    await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
-
-class ModifyPointsModal(Modal):
-    def __init__(self, user, field, operation):
-        super().__init__(title=f"{operation.capitalize()} {field.replace('_', ' ').capitalize()}")
-        self.field = field
-        self.operation = operation
+    def __init__(self, user):
+        super().__init__()
         self.user = user
 
-        self.user_id_input = TextInput(label="User Mention (@username)", required=True)
-        self.points_input = TextInput(label="Points to modify (positive integer)", required=True)
-
-        self.add_item(self.user_id_input)
-        self.add_item(self.points_input)
-
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            uid_str = self.user_id_input.value.strip()
-            uid = int(uid_str.strip("<@!>"))
-            points = int(self.points_input.value.strip())
-            if points < 0:
-                raise ValueError("Points must be positive.")
+        question_text = self.question_input.value.strip()
+        questions = load_questions()
 
-            scores = load_scores()
-            uid_key = str(uid)
+        existing_ids = []
+        for q in questions:
+            try:
+                existing_ids.append(int(q.get("id")))
+            except (TypeError, ValueError):
+                pass
+        next_id = str(max(existing_ids) + 1) if existing_ids else "1"
 
-            if uid_key not in scores:
-                scores[uid_key] = {
-                    "insight_points": 0,
-                    "contribution_points": 0,
-                    "answered_questions": [],
-                    "last_contrib_award": None
-                }
+        questions.append({"id": next_id, "question": question_text, "submitter": str(self.user.id)})
+        save_questions(questions)
 
-            if self.operation == "add":
-                scores[uid_key][self.field] += points
-                verb = "added to"
-            else:
-                scores[uid_key][self.field] = max(0, scores[uid_key][self.field] - points)
-                verb = "removed from"
+        scores = load_scores()
+        uid = str(self.user.id)
+        today = datetime.date.today()
 
+        if uid not in scores:
+            scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": [], "last_contrib_award": None}
+
+        last_award = scores[uid].get("last_contrib_award")
+        if last_award != str(today):
+            scores[uid]["contribution_points"] += 1
+            scores[uid]["last_contrib_award"] = str(today)
             save_scores(scores)
-            await interaction.response.send_message(f"✅ {points} points {verb} <@{uid}>'s {self.field.replace('_', ' ')}.", ephemeral=True)
+            await interaction.response.send_message(f"\u2705 Question submitted successfully! ID: `{next_id}`\n\n💡 You have been awarded 1 contribution point for your submission today.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"\u2705 Question submitted successfully! ID: `{next_id}`\n\n⚠️ You have already received a contribution point today.", ephemeral=True)
 
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
+@tree.command(name="submitquestion", description="Submit a new question")
+async def submit_question(interaction: discord.Interaction):
+    await interaction.response.send_modal(SubmitQuestionModal(interaction.user))
 
-def admin_point_command(name, description, field, operation):
-    @tree.command(name=name, description=description)
-    async def command(interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
-            return
-        await interaction.response.send_modal(ModifyPointsModal(interaction.user, field, operation))
+# Slash command: /questionlist
+@tree.command(name="questionlist", description="Admin-only view of questions with IDs")
+async def question_list(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
+        return
+    questions = load_questions()
+    if not questions:
+        await interaction.response.send_message("\u26A0 No questions found.", ephemeral=True)
+        return
+    lines = [f"`{q['id']}`: {q['question'][:80]}{'...' if len(q['question']) > 80 else ''}" for q in questions]
+    await interaction.response.send_message("\U0001F4CB Questions:\n" + "\n".join(lines), ephemeral=True)
 
-admin_point_command("addinsightpoints", "Add Insight Points to a user", "insight_points", "add")
-admin_point_command("addcontributorpoints", "Add Contributor Points to a user", "contribution_points", "add")
-admin_point_command("removeinsightpoints", "Remove Insight Points from a user", "insight_points", "remove")
-admin_point_command("removecontributorpoints", "Remove Contributor Points from a user", "contribution_points", "remove")
+# Slash command: /removequestion
+@tree.command(name="removequestion", description="Admin-only: Remove a question by ID")
+@app_commands.describe(question_id="Enter the ID of the question to remove")
+async def remove_question(interaction: discord.Interaction, question_id: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("\u274C You do not have permission to use this command.", ephemeral=True)
+        return
+    questions = load_questions()
+    new_questions = [q for q in questions if q['id'] != question_id]
+    if len(new_questions) == len(questions):
+        await interaction.response.send_message("\u274C No question found with that ID.", ephemeral=True)
+        return
+    save_questions(new_questions)
+    await interaction.response.send_message(f"\u2705 Question `{question_id}` removed successfully.", ephemeral=True)
 
+# Slash command: /score
+@tree.command(name="score", description="Show your score and rank")
+async def score(interaction: discord.Interaction):
+    scores = load_scores()
+    uid = str(interaction.user.id)
+    score = scores.get(uid, {"insight_points": 0, "contribution_points": 0})
+    insight = score.get("insight_points", 0)
+    contrib = score.get("contribution_points", 0)
+    total = insight + contrib
+    await interaction.response.send_message(f"⭐ Insight: {insight}\n💡 Contribution: {contrib}\n🏆 Rank: {get_rank(total)}", ephemeral=True)
+
+# Slash command: /leaderboard (already implemented with category select)
 @tree.command(name="leaderboard", description="View the leaderboard by category")
 async def leaderboard(interaction: discord.Interaction):
     scores = load_scores()
