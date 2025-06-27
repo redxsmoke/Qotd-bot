@@ -69,10 +69,8 @@ def get_rank(total):
     else:
         return "\U0001F371 Sushi Sensei"
 
-def is_admin(interaction: discord.Interaction):
+def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_messages
-
-# ----- Daily Question Posting Logic & Modal Views -----
 
 async def post_question():
     q = get_today_question()
@@ -133,7 +131,12 @@ async def post_question():
     channel = client.get_channel(CHANNEL_ID)
     await channel.send(f"@everyone {question}\n\n{submitter_text}", view=QuestionView(q["id"]))
 
-# ----- Tasks -----
+@client.event
+async def on_ready():
+    print("\u2705 Discord bot connected")
+    await tree.sync()
+    purge_channel_before_post.start()
+    post_daily_message.start()
 
 @tasks.loop(time=time(hour=11, minute=59))
 async def purge_channel_before_post():
@@ -145,15 +148,6 @@ async def purge_channel_before_post():
 async def post_daily_message():
     await post_question()
 
-# ----- Events -----
-
-@client.event
-async def on_ready():
-    print("\u2705 Discord bot connected")
-    await tree.sync()
-    purge_channel_before_post.start()
-    post_daily_message.start()
-
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -162,8 +156,6 @@ async def on_message(message):
         admin_channel = client.get_channel(ADMIN_CHANNEL_ID)
         await admin_channel.send(f"\U0001F4E9 Anonymous answer:\n{message.content}")
         await message.channel.send("\u2705 Received anonymously.")
-
-# ----- Slash Commands -----
 
 @tree.command(name="questionofthedaycommands", description="List available question commands")
 async def question_commands(interaction: discord.Interaction):
@@ -266,10 +258,8 @@ async def score(interaction: discord.Interaction):
     total = insight + contrib
     await interaction.response.send_message(f"⭐ Insight: {insight}\n💡 Contribution: {contrib}\n🏆 Rank: {get_rank(total)}", ephemeral=True)
 
-# Leaderboard select menu and view logic
-
 class LeaderboardSelect(Select):
-    def __init__(self, interaction, scores):
+    def __init__(self, interaction, scores, page=0):
         options = [
             discord.SelectOption(label="All", description="Combined Insight and Contribution points"),
             discord.SelectOption(label="Insight", description="Insight points only"),
@@ -278,7 +268,7 @@ class LeaderboardSelect(Select):
         super().__init__(placeholder="Choose leaderboard category...", min_values=1, max_values=1, options=options)
         self.interaction = interaction
         self.scores = scores
-        self.page = 0
+        self.page = page
 
     async def update_message(self, interaction):
         category = self.values[0]
@@ -320,10 +310,13 @@ class LeaderboardSelect(Select):
             for i, entry in enumerate(page_entries, start=start_idx + 1):
                 if category == "All":
                     uid, insight, contrib, total = entry
-                    lines.append(f"{i}. <@{uid}> — {insight} insight points / {contrib} contribution points")
+                    rank_str = get_rank(insight + contrib)
+                    lines.append(f"{i}. <@{uid}> — {insight} \U0001F4A1 insight / {contrib} \U0001F4A1 contribution points — {rank_str}")
                 else:
                     uid, pts = entry
-                    lines.append(f"{i}. <@{uid}> — {pts} points")
+                    rank_str = get_rank(pts)
+                    emoji = "\U0001F4A1"  # Light bulb emoji for insight/contrib
+                    lines.append(f"{i}. <@{uid}> — {pts} {emoji} points — {rank_str}")
             text = "\n".join(lines)
 
         footer_text = f"Page {self.page + 1} / {max_page + 1}"
@@ -407,10 +400,13 @@ class LeaderboardView(View):
             for i, entry in enumerate(page_entries, start=start_idx + 1):
                 if category == "All":
                     uid, insight, contrib, total = entry
-                    lines.append(f"{i}. <@{uid}> — {insight} insight points / {contrib} contribution points")
+                    rank_str = get_rank(insight + contrib)
+                    lines.append(f"{i}. <@{uid}> — {insight} \U0001F4A1 insight / {contrib} \U0001F4A1 contribution points — {rank_str}")
                 else:
                     uid, pts = entry
-                    lines.append(f"{i}. <@{uid}> — {pts} points")
+                    rank_str = get_rank(pts)
+                    emoji = "\U0001F4A1"
+                    lines.append(f"{i}. <@{uid}> — {pts} {emoji} points — {rank_str}")
             text = "\n".join(lines)
 
         footer_text = f"Page {self.page + 1} / {self.max_page + 1}"
@@ -445,66 +441,73 @@ class CategorySelect(Select):
 async def leaderboard(interaction: discord.Interaction):
     scores = load_scores()
     if not scores:
-        await interaction.response.send_message("No scores found yet.", ephemeral=True)
+        await interaction.response.send_message("No scores found yet.", ephemeral=False)
         return
     view = LeaderboardView(interaction, scores, "All", 0, 0)
-    # Start with first page and "All" category leaderboard
     lb_select = LeaderboardSelect(interaction, scores)
     lb_select.page = 0
     lb_select.values = ["All"]
     await lb_select.update_message(interaction)
+    await interaction.response.send_message("Leaderboard:", view=view, ephemeral=False)
 
-    await interaction.response.send_message("Leaderboard:", view=view, ephemeral=True)
+# Admin point add/remove commands, allowing @mention user input for adding/removing points
 
-# --- Admin-only points commands ---
-
-@app_commands.check(is_admin)
-@tree.command(name="addinsightpoints", description="Admin-only: Add insight points to a user")
-@app_commands.describe(user="User to add points to", amount="Amount of points to add")
-async def add_insight_points(interaction: discord.Interaction, user: discord.Member, amount: int):
+@tree.command(name="addinsightpoints", description="Admin: Add insight points to a user")
+@app_commands.describe(user="Mention the user", points="Number of points to add")
+async def add_insight_points(interaction: discord.Interaction, user: discord.Member, points: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("\u274C You do not have permission.", ephemeral=True)
+        return
     scores = load_scores()
     uid = str(user.id)
     if uid not in scores:
         scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
-    scores[uid]["insight_points"] += amount
+    scores[uid]["insight_points"] += points
     save_scores(scores)
-    await interaction.response.send_message(f"\u2705 Added {amount} insight points to {user.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"\u2705 Added {points} insight point(s) to {user.display_name}.")
 
-@app_commands.check(is_admin)
-@tree.command(name="addcontributorpoints", description="Admin-only: Add contributor points to a user")
-@app_commands.describe(user="User to add points to", amount="Amount of points to add")
-async def add_contributor_points(interaction: discord.Interaction, user: discord.Member, amount: int):
+@tree.command(name="addcontributorpoints", description="Admin: Add contributor points to a user")
+@app_commands.describe(user="Mention the user", points="Number of points to add")
+async def add_contributor_points(interaction: discord.Interaction, user: discord.Member, points: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("\u274C You do not have permission.", ephemeral=True)
+        return
     scores = load_scores()
     uid = str(user.id)
     if uid not in scores:
         scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
-    scores[uid]["contribution_points"] += amount
+    scores[uid]["contribution_points"] += points
     save_scores(scores)
-    await interaction.response.send_message(f"\u2705 Added {amount} contributor points to {user.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"\u2705 Added {points} contributor point(s) to {user.display_name}.")
 
-@app_commands.check(is_admin)
-@tree.command(name="removeinsightpoints", description="Admin-only: Remove insight points from a user")
-@app_commands.describe(user="User to remove points from", amount="Amount of points to remove")
-async def remove_insight_points(interaction: discord.Interaction, user: discord.Member, amount: int):
+@tree.command(name="removeinsightpoints", description="Admin: Remove insight points from a user")
+@app_commands.describe(user="Mention the user", points="Number of points to remove")
+async def remove_insight_points(interaction: discord.Interaction, user: discord.Member, points: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("\u274C You do not have permission.", ephemeral=True)
+        return
     scores = load_scores()
     uid = str(user.id)
     if uid not in scores:
-        scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
-    scores[uid]["insight_points"] = max(0, scores[uid]["insight_points"] - amount)
+        await interaction.response.send_message(f"\u274C User {user.display_name} has no points to remove.", ephemeral=True)
+        return
+    scores[uid]["insight_points"] = max(0, scores[uid]["insight_points"] - points)
     save_scores(scores)
-    await interaction.response.send_message(f"\u2705 Removed {amount} insight points from {user.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"\u2705 Removed {points} insight point(s) from {user.display_name}.")
 
-@app_commands.check(is_admin)
-@tree.command(name="removecontributorpoints", description="Admin-only: Remove contributor points from a user")
-@app_commands.describe(user="User to remove points from", amount="Amount of points to remove")
-async def remove_contributor_points(interaction: discord.Interaction, user: discord.Member, amount: int):
+@tree.command(name="removecontributorpoints", description="Admin: Remove contributor points from a user")
+@app_commands.describe(user="Mention the user", points="Number of points to remove")
+async def remove_contributor_points(interaction: discord.Interaction, user: discord.Member, points: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("\u274C You do not have permission.", ephemeral=True)
+        return
     scores = load_scores()
     uid = str(user.id)
     if uid not in scores:
-        scores[uid] = {"insight_points": 0, "contribution_points": 0, "answered_questions": []}
-    scores[uid]["contribution_points"] = max(0, scores[uid]["contribution_points"] - amount)
+        await interaction.response.send_message(f"\u274C User {user.display_name} has no points to remove.", ephemeral=True)
+        return
+    scores[uid]["contribution_points"] = max(0, scores[uid]["contribution_points"] - points)
     save_scores(scores)
-    await interaction.response.send_message(f"\u2705 Removed {amount} contributor points from {user.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"\u2705 Removed {points} contributor point(s) from {user.display_name}.")
 
-# ----- Run bot -----
 client.run(TOKEN)
