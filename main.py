@@ -159,6 +159,13 @@ async def on_message(message):
         await message.channel.send("\u2705 Received anonymously.")
 
 # --- Slash Commands ---
+@tree.command(name="questionofthedaycommands", description="List available question commands")
+async def question_commands(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Available commands:\n/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks",
+        ephemeral=True
+    )
+
 @tree.command(name="ranks", description="View the sushi-themed ranking tiers")
 async def ranks(interaction: discord.Interaction):
     await interaction.response.send_message(
