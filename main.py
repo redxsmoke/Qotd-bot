@@ -363,7 +363,7 @@ async def add_insight(interaction, user: discord.Member, amount: int):
     sc=load_scores();uid=str(user.id)
     sc.setdefault(uid,{"insight_points":0,"contribution_points":0,"answered":[]})
     sc[uid]["insight_points"]+=amount; save_scores(sc)
-    await interaction.response.send_message(f"✅ +{amount} insight to {user.mention}",ephemeral=False)
+    await interaction.response.send_message(f"✅ +{amount} insight to {user.mention}",ephemeral=True)
 
 @tree.command(name="addcontributorpoints", description="Admin: add contribution points")
 @app_commands.describe(user="Mention user", amount="Points to add")
@@ -373,7 +373,7 @@ async def add_contrib(interaction, user: discord.Member, amount: int):
     sc=load_scores();uid=str(user.id)
     sc.setdefault(uid,{"insight_points":0,"contribution_points":0,"answered":[]})
     sc[uid]["contribution_points"]+=amount; save_scores(sc)
-    await interaction.response.send_message(f"✅ +{amount} contribution to {user.mention}",ephemeral=False)
+    await interaction.response.send_message(f"✅ +{amount} contribution to {user.mention}",ephemeral=True)
 
 @tree.command(name="removeinsightpoints", description="Admin: remove insight points")
 @app_commands.describe(user="Mention user", amount="Points to remove")
@@ -383,7 +383,7 @@ async def remove_insight(interaction, user: discord.Member, amount: int):
     sc=load_scores();uid=str(user.id)
     sc.setdefault(uid,{"insight_points":0,"contribution_points":0,"answered":[]})
     sc[uid]["insight_points"]=max(0,sc[uid]["insight_points"]-amount); save_scores(sc)
-    await interaction.response.send_message(f"✅ -{amount} insight from {user.mention}",ephemeral=False)
+    await interaction.response.send_message(f"✅ -{amount} insight from {user.mention}",ephemeral=True)
 
 @tree.command(name="removecontributorpoints", description="Admin: remove contribution points")
 @app_commands.describe(user="Mention user", amount="Points to remove")
@@ -393,6 +393,6 @@ async def remove_contrib(interaction, user: discord.Member, amount: int):
     sc=load_scores();uid=str(user.id)
     sc.setdefault(uid,{"insight_points":0,"contribution_points":0,"answered":[]})
     sc[uid]["contribution_points"]=max(0,sc[uid]["contribution_points"]-amount); save_scores(sc)
-    await interaction.response.send_message(f"✅ -{amount} contribution from {user.mention}",ephemeral=False)
+    await interaction.response.send_message(f"✅ -{amount} contribution from {user.mention}",ephemeral=True)
 
 client.run(TOKEN)
