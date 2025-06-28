@@ -233,7 +233,7 @@ class SubmitModal(Modal, title="Submit a Question"):
         member = guild.get_member(self.user.id) if guild else None
         display_name = member.display_name if member else f"{self.user.name}#{self.user.discriminator}"
 
-        notify_msg = f"🧠 @{display_name} has submitted a new question. Use /listquestions to view the question and use /removequestion if moderation is needed."
+        notify_msg = f"🧠 @{display_name} has submitted a new question. Use /questionslist to view the question and use /removequestion if moderation is needed."
 
         # Then send to admins/mods DMs
         for member in guild.members:
