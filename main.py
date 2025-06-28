@@ -59,8 +59,10 @@ def get_rank(total):
         return "🍣 Sashimi Scholar"
     elif total <= 75:
         return "🌶️ Wasabi Wizard"
-    else:
+    elif total <= 99:
         return "🍱 Sushi Sensei"
+    else:
+        return "🍣 Master Sushi Chef"
 
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_messages
@@ -83,11 +85,11 @@ async def post_question():
             super().__init__(timeout=None)
             self.qid = qid
 
-        @discord.ui.button(label="Answer Freely ⭐", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="Answer Freely ⭐ (+1 Insight Point)", style=discord.ButtonStyle.primary)
         async def freely(self, interaction, button):
             await interaction.response.send_modal(AnswerModal(self.qid, interaction.user))
 
-        @discord.ui.button(label="Answer Anonymously 🔒", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label="Answer Anonymously 🔒 (0 Insight Points)", style=discord.ButtonStyle.secondary)
         async def anon(self, interaction, button):
             await interaction.response.send_modal(AnonModal(self.qid, interaction.user))
 
@@ -135,12 +137,20 @@ async def on_ready():
     print("✅ Discord bot connected")
     await tree.sync()
     purge_channel_before_post.start()
+    notify_upcoming_question.start()
     post_daily_message.start()
 
-@tasks.loop(time=time(hour=11, minute=59))
+@tasks.loop(time=time(hour=11, minute=50))
 async def purge_channel_before_post():
     ch = client.get_channel(CHANNEL_ID)
     await ch.purge(limit=1000)
+
+@tasks.loop(time=time(hour=11, minute=55))
+async def notify_upcoming_question():
+    ch_id = int(os.getenv("DISCORD_CHANNEL_ID") or 0)
+    channel = client.get_channel(ch_id)
+    if channel:
+        await channel.send("⏳ The next question will be posted soon! Submit your own question by using the /submitquestion command and earn 💡 Contribution Points ")
 
 @tasks.loop(time=time(hour=12, minute=0))
 async def post_daily_message():
@@ -159,23 +169,37 @@ async def on_message(msg):
 async def question_commands(interaction):
     await interaction.response.send_message(
         "Commands:\n"
-        "/submitquestion\n/removequestion\n/questionlist\n/score\n/leaderboard\n/ranks\n\n"
-        "Admin-only:\n"
+        "/submitquestion\n/score\n/leaderboard\n/ranks\n\n"
+        "ADMIN ONLY COMMANDS:\n"
+        "/removequestion\n/questionlist\n"
         "/addinsightpoints\n/addcontributorpoints\n/removeinsightpoints\n/removecontributorpoints",
         ephemeral=True
     )
 
-@tree.command(name="ranks", description="View sushi ranks")
-async def ranks(interaction):
-    await interaction.response.send_message(
-        "🏆 Ranks:\n"
-        "🍚 0–10 Rice Rookie\n"
-        "🥢 11–25 Miso Mind\n"
-        "🍣 26–40 Sashimi Scholar\n"
-        "🌶️ 41–75 Wasabi Wizard\n"
-        "🍱 76+ Sushi Sensei",
-        ephemeral=True
-    )
+@tree.command(name="ranks", description="View sushi ranks and point ranges")
+async def ranks(interaction: discord.Interaction):
+    ranks_description = """
+**Sushi Rank Tiers — Based on Total Points (⭐ + 💡):**
+
+🍚 **Rice Rookie**  
+For scores between 0 and 10 points.
+
+🥢 **Miso Mind**  
+For scores between 11 and 25 points.
+
+🍣 **Sashimi Scholar**  
+For scores between 26 and 40 points.
+
+🌶️ **Wasabi Wizard**  
+For scores between 41 and 75 points.
+
+🍱 **Sushi Sensei**  
+For scores between 76 and 99 points.
+
+🍣 **Master Sushi Chef**  
+For scores of 100 points and above.
+"""
+    await interaction.response.send_message(ranks_description, ephemeral=False)
 
 class SubmitModal(Modal, title="Submit a Question"):
     q = TextInput(label="Your question", style=discord.TextStyle.paragraph, max_length=500)
@@ -194,7 +218,7 @@ class SubmitModal(Modal, title="Submit a Question"):
         sc = load_scores()
         uid = str(self.user.id)
         today = str(datetime.date.today())
-        sc.setdefault(uid, {"insight_points":0,"contribution_points":0,"answered":[], "last_contrib":None})
+        sc.setdefault(uid, {"insight_points": 0, "contribution_points": 0, "answered": [], "last_contrib": None})
         if sc[uid]["last_contrib"] != today:
             sc[uid]["contribution_points"] += 1
             sc[uid]["last_contrib"] = today
@@ -202,6 +226,22 @@ class SubmitModal(Modal, title="Submit a Question"):
             await inter.response.send_message(f"✅ Submitted! ID `{nid}` +1 contribution point", ephemeral=True)
         else:
             await inter.response.send_message(f"✅ Submitted! ID `{nid}` (already got today's point)", ephemeral=True)
+
+        # --- Notify admins/mods here ---
+        # Fetch guild from interaction
+        guild = inter.guild
+        member = guild.get_member(self.user.id) if guild else None
+        display_name = member.display_name if member else f"{self.user.name}#{self.user.discriminator}"
+
+        notify_msg = f"🧠 @{display_name} has submitted a new question. Use /listquestions to view the question and use /removequestion if moderation is needed."
+
+        # Then send to admins/mods DMs
+        for member in guild.members:
+            if member.guild_permissions.administrator or member.guild_permissions.manage_messages:
+                try:
+                    await member.send(notify_msg)
+                except Exception as e:
+                    print(f"Could not DM {member}: {e}")
 
 @tree.command(name="submitquestion", description="Submit a question")
 async def submit_question(interaction):
@@ -235,7 +275,7 @@ async def score(interaction):
     tot = sc["insight_points"]+sc["contribution_points"]
     await interaction.response.send_message(
         f"⭐ {sc['insight_points']} | 💡 {sc['contribution_points']} | 🏆 {get_rank(tot)}",
-        ephemeral=True
+        ephemeral=False
     )
 
 # ------- LEADERBOARD with category select and pagination -------
@@ -285,10 +325,10 @@ class CategorySelect(Select):
             for i,e in enumerate(slice,start+1):
                 if cat=="All":
                     uid,ins,con,tot=e
-                    lines.append(f"{i}. <@{uid}> — {ins} 🧠 / {con} 💡 — {get_rank(tot)}")
+                    lines.append(f"{i}. <@{uid}> — {ins} ⭐ / {con} 💡 — {get_rank(tot)}")
                 else:
                     uid,pt=e
-                    em="🧠" if cat=="Insight" else "💡"
+                    em="⭐" if cat=="Insight" else "💡"
                     lines.append(f"{i}. <@{uid}> — {pt} {em} — {get_rank(pt)}")
             desc="\n".join(lines)
 
