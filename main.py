@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ui import View, Button, Modal, TextInput, Select
 import logging
 from datetime import time
-import oss
+import os
 
 logging.basicConfig(level=logging.INFO)
 print("💡 main.py is running")
